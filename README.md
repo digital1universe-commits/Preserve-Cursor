@@ -13,6 +13,7 @@ This build ships evaluation accounts so the desk can be reviewed. Remove them be
 - **Area seal.** Draw the area. The desk loads the surrounding driveable roads and places the fewest closure sites that leave no driveable path out to the open network. Footpaths are not sealed. One-way restrictions are ignored. A vehicle can still be on a street inside the closures.
 - **Land search.** Last known point, age, mental state, knowledge of the area, mobility, terrain, and time missing. The ring is an original behavioural estimate: people move toward the easier ground, and the search area grows with time and then fatigues. It is not a copy of a published lost-person distance table.
 - **Marine search.** Last known position, time adrift, and vessel type. On the link, the desk requests only the coordinates from the weather and marine services, then places a datum from wind leeway and current. The leeway fractions are original to this desk.
+- **Public order.** Enter start and end, or draw a foot protest route. The route snaps onto streets, pedestrian malls, alleys, and paths. Available serials, traffic, protection, and mobile units are placed to hold the line of march, block off-route exits, buffer opposing groups, and protect government buildings, schools, police stations, and transport hubs.
 
 ## Security model
 

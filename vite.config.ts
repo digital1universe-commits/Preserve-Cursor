@@ -13,8 +13,8 @@ export default defineConfig({
         name: "PRESERVE",
         short_name: "PRESERVE",
         description: "Secure multi-agency containment and search planning",
-        theme_color: "#121612",
-        background_color: "#121612",
+        theme_color: "#0a1220",
+        background_color: "#0a1220",
         display: "standalone",
         start_url: "/",
         icons: [

@@ -155,15 +155,16 @@ export function OperationMap(props: Props) {
 }
 
 function toneColor(tone: string) {
-  if (tone === "water" || tone === "drift") return "#89c0cb";
-  if (tone === "inner" || tone === "scene") return "#e2a45a";
-  if (tone === "outer") return "#efe8d8";
-  if (tone === "area") return "#e2a45a";
-  if (tone === "search") return "#9cba86";
-  if (tone === "presence") return "#e2a45a";
-  if (tone === "light") return "#efe8d8";
-  if (tone === "hot") return "#e07a68";
-  return "#efe8d8";
+  if (tone === "water" || tone === "drift") return "#6eafc8";
+  if (tone === "inner" || tone === "scene") return "#e0b13a";
+  if (tone === "outer") return "#f3f6fb";
+  if (tone === "area") return "#e0b13a";
+  if (tone === "search") return "#7eb6d6";
+  if (tone === "presence") return "#e0b13a";
+  if (tone === "light") return "#f3f6fb";
+  if (tone === "command") return "#7eb6d6";
+  if (tone === "hot") return "#e06b5c";
+  return "#f3f6fb";
 }
 
 function heatLayer(cells: { lat: number; lng: number; w: number }[]) {

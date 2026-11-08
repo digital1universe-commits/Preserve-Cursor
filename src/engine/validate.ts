@@ -97,6 +97,39 @@ export function asWays(value: unknown): RoadWay[] {
   });
 }
 
+export function validatePublicOrderInput(value: unknown): {
+  start?: LatLng;
+  end?: LatLng;
+  drawn?: LatLng[];
+  resources?: { serials?: number; traffic?: number; protection?: number; mobile?: number };
+  corridorM?: number;
+  opposingAssembly?: LatLng;
+} {
+  const input = record(value);
+  const drawn = Array.isArray(input.drawn)
+    ? input.drawn.map((point, index) => asPoint(point, `Route point ${index + 1}`))
+    : undefined;
+  if (drawn && drawn.length < 2) throw new InputError("Draw at least two points for the protest route.");
+  if (drawn && drawn.length > 120) throw new InputError("Use 120 route points or fewer.");
+  const start = input.start != null ? asPoint(input.start, "Start") : undefined;
+  const end = input.end != null ? asPoint(input.end, "End") : undefined;
+  if (!drawn && (!start || !end)) throw new InputError("Set a start and end, or draw the protest route.");
+  const resourcesRaw = input.resources && typeof input.resources === "object" ? (input.resources as Record<string, unknown>) : {};
+  return {
+    start,
+    end,
+    drawn,
+    resources: {
+      serials: optionalNumber(resourcesRaw.serials, 0, 200, "Serials"),
+      traffic: optionalNumber(resourcesRaw.traffic, 0, 100, "Traffic units"),
+      protection: optionalNumber(resourcesRaw.protection, 0, 100, "Protection units"),
+      mobile: optionalNumber(resourcesRaw.mobile, 0, 100, "Mobile reserve"),
+    },
+    corridorM: optionalNumber(input.corridorM, 20, 120, "Route corridor"),
+    opposingAssembly: input.opposingAssembly != null ? asPoint(input.opposingAssembly, "Opposing assembly") : undefined,
+  };
+}
+
 export function validateCordonInput(value: unknown): {
   subject: LatLng;
   structure: StructureKind;

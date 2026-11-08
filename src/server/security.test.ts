@@ -72,8 +72,8 @@ test("accounts, grants, and plans stay inside the installation", async () => {
   const fieldCookie = await signIn(base, "field@hmp.preserve.test");
   const fieldList = await fetch(`${base}/api/incidents`, { headers: { cookie: fieldCookie } }).then((res) => res.json());
   assert.deepEqual(
-    fieldList.incidents.map((item: { id: string }) => item.id),
-    ["inc-cordon"],
+    fieldList.incidents.map((item: { id: string }) => item.id).sort(),
+    ["inc-cordon", "inc-order"].sort(),
   );
   const hidden = await fetch(`${base}/api/incidents/inc-land`, { headers: { cookie: fieldCookie } });
   assert.equal(hidden.status, 404);

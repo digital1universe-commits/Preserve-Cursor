@@ -13,7 +13,9 @@ import { kvGet, kvSet, outboxAdd } from "../offline";
 import { fetchPresence, type PresenceScope } from "../presence";
 import type { PresencePin } from "../api";
 
-const MODULES = ["cordon", "containment", "land_sar", "marine_sar", "record"] as const;
+const MODULES = ["cordon", "containment", "land_sar", "marine_sar", "public_order", "record"] as const;
+const TRAINING_ORDER_START = { lat: -36.833, lng: 174.7955 };
+const TRAINING_ORDER_END = { lat: -36.8288, lng: 174.7995 };
 const TRAINING_AREA: LatLng[] = [
   { lat: -36.8272, lng: 174.7925 },
   { lat: -36.8272, lng: 174.8015 },
@@ -66,6 +68,19 @@ type MarineForm = {
   currentSpeedKn: string;
   currentTowardDeg: string;
 };
+type PublicOrderForm = {
+  mode: "endpoints" | "draw";
+  start: LatLng | null;
+  end: LatLng | null;
+  drawn: LatLng[];
+  serials: string;
+  traffic: string;
+  protection: string;
+  mobile: string;
+  corridorM: string;
+  opposing: LatLng | null;
+  placing: "start" | "end" | "opposing" | "draw";
+};
 
 export function IncidentPage() {
   const { id = "" } = useParams();
@@ -83,6 +98,7 @@ export function IncidentPage() {
   const [cordon, setCordon] = useState<CordonForm | null>(null);
   const [land, setLand] = useState<LandForm | null>(null);
   const [marine, setMarine] = useState<MarineForm | null>(null);
+  const [order, setOrder] = useState<PublicOrderForm | null>(null);
   const [context, setContext] = useState<DeviceContext>({});
   const [mapMode, setMapMode] = useState<"flat" | "terrain">("flat");
   const [showLights, setShowLights] = useState(false);
@@ -139,6 +155,19 @@ export function IncidentPage() {
           currentSpeedKn: "",
           currentTowardDeg: "",
         });
+        setOrder({
+          mode: "endpoints",
+          start: point,
+          end: null,
+          drawn: [],
+          serials: "12",
+          traffic: "6",
+          protection: "6",
+          mobile: "4",
+          corridorM: "45",
+          opposing: null,
+          placing: "end",
+        });
         const cached = await kvGet<DeviceContext>(`context:${id}`);
         if (cached) setContext(cached);
         const latest = data.plans.find((item) => item.module === data.incident.kind);
@@ -163,10 +192,11 @@ export function IncidentPage() {
     if (module === "containment" && polygon[0]) return polygon[0];
     if (module === "land_sar" && land) return land.lkp;
     if (module === "marine_sar" && marine) return marine.lkp;
+    if (module === "public_order" && order?.start) return order.start;
     if (cordon) return cordon.subject;
     if (detail) return { lat: detail.incident.lat, lng: detail.incident.lng };
     return { lat: -36.83, lng: 174.8 };
-  }, [module, polygon, land, marine, cordon, detail]);
+  }, [module, polygon, land, marine, cordon, order, detail]);
 
   useEffect(() => {
     if (!auth.online || !showPeople) {
@@ -216,7 +246,7 @@ export function IncidentPage() {
   }, [auth.online, showLights, center, context.lights]);
 
   const graphics = useMemo(() => {
-    const base = graphicsFor(module, plan, cordon, land, marine, polygon, polygonClosed);
+    const base = graphicsFor(module, plan, cordon, land, marine, order, polygon, polygonClosed);
     if (showPeople) {
       for (const person of people) {
         base.markers.push({
@@ -242,7 +272,7 @@ export function IncidentPage() {
       }
     }
     return base;
-  }, [module, plan, cordon, land, marine, polygon, polygonClosed, showPeople, people, showLights, lights]);
+  }, [module, plan, cordon, land, marine, order, polygon, polygonClosed, showPeople, people, showLights, lights]);
 
   function onMapClick(point: LatLng) {
     if (!detail?.can.plan[module]) return;
@@ -256,6 +286,24 @@ export function IncidentPage() {
       else setCordon({ ...cordon, subject: point });
       return;
     }
+    if (module === "public_order" && order) {
+      if (order.placing === "draw" || order.mode === "draw") {
+        setOrder({ ...order, mode: "draw", placing: "draw", drawn: [...order.drawn, point] });
+        return;
+      }
+      if (order.placing === "start") {
+        setOrder({ ...order, start: point, placing: order.end ? "start" : "end" });
+        return;
+      }
+      if (order.placing === "end") {
+        setOrder({ ...order, end: point });
+        return;
+      }
+      if (order.placing === "opposing") {
+        setOrder({ ...order, opposing: point });
+        return;
+      }
+    }
     if (module === "land_sar" && land) setLand({ ...land, lkp: point });
     if (module === "marine_sar" && marine) setMarine({ ...marine, lkp: point });
   }
@@ -264,7 +312,7 @@ export function IncidentPage() {
     if (!detail) return;
     setBusy(true);
     setError("");
-    const input = inputFor(module, cordon, land, marine, polygon);
+    const input = inputFor(module, cordon, land, marine, order, polygon);
     const environment = marineEnvironment(marine);
     try {
       if (!input) throw new Error("Complete the plan inputs first.");
@@ -343,7 +391,7 @@ export function IncidentPage() {
     }
   }
 
-  if (!detail || !cordon || !land || !marine) {
+  if (!detail || !cordon || !land || !marine || !order) {
     return (
       <div className="page">
         <p>{error || "Opening the incident"}</p>
@@ -497,8 +545,37 @@ export function IncidentPage() {
             )}
             {module === "land_sar" && <LandFields form={land} setForm={setLand} disabled={!allowed} />}
             {module === "marine_sar" && <MarineFields form={marine} setForm={setMarine} disabled={!allowed} />}
+            {module === "public_order" && (
+              <PublicOrderFields
+                form={order}
+                setForm={setOrder}
+                disabled={!allowed}
+                onTraining={() => {
+                  setOrder({
+                    ...order,
+                    mode: "endpoints",
+                    start: TRAINING_ORDER_START,
+                    end: TRAINING_ORDER_END,
+                    drawn: [],
+                    placing: "end",
+                    opposing: null,
+                  });
+                  setFrame((value) => value + 1);
+                }}
+              />
+            )}
             {allowed && module !== "record" && (
-              <button type="button" className="primary" disabled={busy || (module === "containment" && polygon.length < 3)} onClick={() => void build()}>
+              <button
+                type="button"
+                className="primary"
+                disabled={
+                  busy ||
+                  (module === "containment" && polygon.length < 3) ||
+                  (module === "public_order" &&
+                    !(order.mode === "draw" ? order.drawn.length >= 2 : Boolean(order.start && order.end)))
+                }
+                onClick={() => void build()}
+              >
                 {busy ? "Running the model…" : auth.online ? "Build plan" : "Build on this device"}
               </button>
             )}
@@ -825,6 +902,99 @@ function MarineFields({ form, setForm, disabled }: { form: MarineForm; setForm: 
   );
 }
 
+function PublicOrderFields({
+  form,
+  setForm,
+  disabled,
+  onTraining,
+}: {
+  form: PublicOrderForm;
+  setForm: (form: PublicOrderForm) => void;
+  disabled: boolean;
+  onTraining: () => void;
+}) {
+  return (
+    <div className="stack">
+      <p className="hint">
+        Enter start and end, or draw the foot route. The model snaps onto streets, pedestrian malls, alleys, and paths, then places available resources to keep the march on route and protect nearby sites.
+      </p>
+      <div className="row-actions">
+        <button
+          type="button"
+          className={form.mode === "endpoints" ? "text-button on" : "text-button"}
+          disabled={disabled}
+          onClick={() => setForm({ ...form, mode: "endpoints", placing: "start", drawn: [] })}
+        >
+          Start / end
+        </button>
+        <button
+          type="button"
+          className={form.mode === "draw" ? "text-button on" : "text-button"}
+          disabled={disabled}
+          onClick={() => setForm({ ...form, mode: "draw", placing: "draw" })}
+        >
+          Draw route
+        </button>
+        <button type="button" className={form.placing === "opposing" ? "text-button on" : "text-button"} disabled={disabled} onClick={() => setForm({ ...form, placing: "opposing" })}>
+          Opposing assembly
+        </button>
+      </div>
+      {form.mode === "endpoints" ? (
+        <div className="row-actions">
+          <button type="button" className={form.placing === "start" ? "text-button on" : "text-button"} disabled={disabled} onClick={() => setForm({ ...form, placing: "start" })}>
+            Set start{form.start ? " ✓" : ""}
+          </button>
+          <button type="button" className={form.placing === "end" ? "text-button on" : "text-button"} disabled={disabled} onClick={() => setForm({ ...form, placing: "end" })}>
+            Set end{form.end ? " ✓" : ""}
+          </button>
+        </div>
+      ) : (
+        <div className="row-actions">
+          <button type="button" className="text-button" disabled={disabled || !form.drawn.length} onClick={() => setForm({ ...form, drawn: form.drawn.slice(0, -1) })}>
+            Undo point
+          </button>
+          <button type="button" className="text-button" disabled={disabled} onClick={() => setForm({ ...form, drawn: [] })}>
+            Clear route
+          </button>
+          <span className="hint">{form.drawn.length} point{form.drawn.length === 1 ? "" : "s"}</span>
+        </div>
+      )}
+      {form.opposing && (
+        <button type="button" className="text-button" disabled={disabled} onClick={() => setForm({ ...form, opposing: null, placing: form.mode === "draw" ? "draw" : "end" })}>
+          Clear opposing assembly
+        </button>
+      )}
+      <div className="split">
+        <label>
+          Serials
+          <input disabled={disabled} value={form.serials} onChange={(event) => setForm({ ...form, serials: event.target.value })} />
+        </label>
+        <label>
+          Traffic
+          <input disabled={disabled} value={form.traffic} onChange={(event) => setForm({ ...form, traffic: event.target.value })} />
+        </label>
+      </div>
+      <div className="split">
+        <label>
+          Protection
+          <input disabled={disabled} value={form.protection} onChange={(event) => setForm({ ...form, protection: event.target.value })} />
+        </label>
+        <label>
+          Mobile
+          <input disabled={disabled} value={form.mobile} onChange={(event) => setForm({ ...form, mobile: event.target.value })} />
+        </label>
+      </div>
+      <label>
+        Corridor m
+        <input disabled={disabled} value={form.corridorM} placeholder="45" onChange={(event) => setForm({ ...form, corridorM: event.target.value })} />
+      </label>
+      <button type="button" className="text-button" onClick={onTraining}>
+        Training march
+      </button>
+    </div>
+  );
+}
+
 function Briefing({ plan }: { plan: PlanRecord }) {
   const output = plan.output as {
     narrative?: string[];
@@ -846,6 +1016,10 @@ function Briefing({ plan }: { plan: PlanRecord }) {
     minimumGuaranteed?: boolean;
     standoffM?: number;
     escapeRadiusM?: number;
+    routeLengthM?: number;
+    snapped?: boolean;
+    resourcesUsed?: { serials: number; traffic: number; protection: number; mobile: number };
+    protectedNearRoute?: { site: { name: string; kind: string }; distanceM: number }[];
   };
   return (
     <article className="briefing">
@@ -858,6 +1032,16 @@ function Briefing({ plan }: { plan: PlanRecord }) {
           Scene standoff <strong>{output.standoffM} m</strong> · escape sector <strong>{output.escapeRadiusM} m</strong> ·{" "}
           <strong>{output.closures?.length ?? 0}</strong> street block{(output.closures?.length ?? 0) === 1 ? "" : "s"} ·{" "}
           <strong>{output.searchTasks?.length ?? 0}</strong> search task{(output.searchTasks?.length ?? 0) === 1 ? "" : "s"}
+        </p>
+      )}
+      {output.routeLengthM != null && (
+        <p className="stat">
+          Route <strong>{formatKm(output.routeLengthM)}</strong>
+          {output.snapped ? ", snapped to the foot network" : ""} · <strong>{output.posts?.length ?? 0}</strong> resource post
+          {(output.posts?.length ?? 0) === 1 ? "" : "s"}
+          {output.resourcesUsed
+            ? ` · used ${output.resourcesUsed.serials} serial / ${output.resourcesUsed.traffic} traffic / ${output.resourcesUsed.protection} protect / ${output.resourcesUsed.mobile} mobile`
+            : ""}
         </p>
       )}
       {output.closureCount != null && (
@@ -1100,6 +1284,7 @@ function inputFor(
   cordon: CordonForm | null,
   land: LandForm | null,
   marine: MarineForm | null,
+  order: PublicOrderForm | null,
   polygon: LatLng[],
 ): Record<string, unknown> | null {
   if (module === "cordon" && cordon) {
@@ -1131,6 +1316,35 @@ function inputFor(
       positionErrorNm: marine.positionErrorNm ? Number(marine.positionErrorNm) : undefined,
     };
   }
+  if (module === "public_order" && order) {
+    if (order.mode === "draw") {
+      if (order.drawn.length < 2) return null;
+      return {
+        drawn: order.drawn,
+        resources: {
+          serials: Number(order.serials || 0),
+          traffic: Number(order.traffic || 0),
+          protection: Number(order.protection || 0),
+          mobile: Number(order.mobile || 0),
+        },
+        corridorM: order.corridorM ? Number(order.corridorM) : undefined,
+        opposingAssembly: order.opposing || undefined,
+      };
+    }
+    if (!order.start || !order.end) return null;
+    return {
+      start: order.start,
+      end: order.end,
+      resources: {
+        serials: Number(order.serials || 0),
+        traffic: Number(order.traffic || 0),
+        protection: Number(order.protection || 0),
+        mobile: Number(order.mobile || 0),
+      },
+      corridorM: order.corridorM ? Number(order.corridorM) : undefined,
+      opposingAssembly: order.opposing || undefined,
+    };
+  }
   return null;
 }
 
@@ -1151,6 +1365,7 @@ function stripEmpty(context: DeviceContext): DeviceContext {
     paths: context.paths?.length ? context.paths : undefined,
     parks: context.parks?.length ? context.parks : undefined,
     lights: context.lights?.length ? context.lights : undefined,
+    sites: context.sites?.length ? context.sites : undefined,
     elevation: context.elevation?.length ? context.elevation : undefined,
     environment: context.environment,
   };
@@ -1162,6 +1377,7 @@ function graphicsFor(
   cordon: CordonForm | null,
   land: LandForm | null,
   marine: MarineForm | null,
+  order: PublicOrderForm | null,
   polygon: LatLng[],
   polygonClosed: boolean,
 ) {
@@ -1180,6 +1396,12 @@ function graphicsFor(
   }
   if (module === "land_sar" && land) markers.push({ id: "lkp", ...land.lkp, label: "LKP", tone: "subject", detail: "Last known point" });
   if (module === "marine_sar" && marine) markers.push({ id: "lkp", ...marine.lkp, label: "LKP", tone: "subject", detail: "Last known position" });
+  if (module === "public_order" && order) {
+    if (order.start) markers.push({ id: "start", ...order.start, label: "START", tone: "subject", detail: "March start" });
+    if (order.end) markers.push({ id: "end", ...order.end, label: "END", tone: "datum", detail: "March finish" });
+    if (order.opposing) markers.push({ id: "opp", ...order.opposing, label: "OPP", tone: "outer", detail: "Opposing assembly" });
+    if (order.drawn.length >= 2) lines.push({ id: "drawn", points: order.drawn, tone: "tick" });
+  }
   if (module === "containment" && polygon.length) {
     polygons.push({ id: "area", points: polygon, tone: "area", fill: polygonClosed });
   }
@@ -1219,6 +1441,37 @@ function graphicsFor(
   if (sea?.datum) markers.push({ id: "datum", ...sea.datum, label: "DATUM", tone: "datum", detail: "Search datum" });
   if (sea?.ellipse) polygons.push({ id: "ellipse", points: sea.ellipse, tone: "water", fill: true });
   sea?.fan?.forEach((line, index) => lines.push({ id: `fan-${index}`, points: line, tone: index === 1 ? "drift" : "water" }));
+
+  const orderOut = output as {
+    route?: LatLng[];
+    posts?: { id: string; kind: string; position: LatLng; rationale: string }[];
+    protectedNearRoute?: { site: { id: string; name: string; kind: string; position: LatLng }; distanceM: number }[];
+  } | null;
+  if (module === "public_order" && orderOut?.route?.length) {
+    lines.push({ id: "protest-route", points: orderOut.route, tone: "drift" });
+  }
+  for (const post of orderOut?.posts ?? []) {
+    const tone =
+      post.kind === "protect"
+        ? "command"
+        : post.kind === "side_block"
+          ? "closure"
+          : post.kind === "clash_buffer"
+            ? "outer"
+            : post.kind === "reserve"
+              ? "rvp"
+              : "inner";
+    markers.push({ id: post.id, ...post.position, label: post.id, tone, detail: post.rationale });
+  }
+  for (const item of orderOut?.protectedNearRoute ?? []) {
+    markers.push({
+      id: `site-${item.site.id}`,
+      ...item.site.position,
+      label: "SITE",
+      tone: "command",
+      detail: `${item.site.name} (${item.site.kind.replaceAll("_", " ")})`,
+    });
+  }
 
   return { markers, circles, polygons, lines, heat };
 }

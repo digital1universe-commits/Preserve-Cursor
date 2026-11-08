@@ -3,6 +3,7 @@ export const KIND_LABEL: Record<string, string> = {
   containment: "Area seal",
   land_sar: "Land search",
   marine_sar: "Marine search",
+  public_order: "Public order",
 };
 
 export const STATUS_LABEL: Record<string, string> = {

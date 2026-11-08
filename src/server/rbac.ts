@@ -7,7 +7,7 @@ export type Role =
   | "field_officer"
   | "observer";
 
-export type ModuleName = "cordon" | "containment" | "land_sar" | "marine_sar";
+export type ModuleName = "cordon" | "containment" | "land_sar" | "marine_sar" | "public_order";
 export type IncidentKind = ModuleName;
 export type GrantLevel = "none" | "view" | "plan";
 
@@ -73,6 +73,7 @@ export function canRunPlan(
     containment: ["superadmin", "agency_admin", "commander", "planner"],
     land_sar: ["superadmin", "agency_admin", "commander", "planner", "search_coordinator"],
     marine_sar: ["superadmin", "agency_admin", "commander", "planner", "search_coordinator"],
+    public_order: ["superadmin", "agency_admin", "commander", "planner"],
   };
   return allowed[module].includes(role);
 }
@@ -91,5 +92,6 @@ export function planPermissions(
     containment: canRunPlan(role, "containment", sameAgency, grant),
     land_sar: canRunPlan(role, "land_sar", sameAgency, grant),
     marine_sar: canRunPlan(role, "marine_sar", sameAgency, grant),
+    public_order: canRunPlan(role, "public_order", sameAgency, grant),
   };
 }

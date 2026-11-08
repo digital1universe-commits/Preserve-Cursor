@@ -34,7 +34,7 @@ export function openContext(dataDir = process.env.PRESERVE_DATA_DIR || path.join
   db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   seed(db, key);
-  ensureOperationalExtras(db);
+  ensureOperationalExtras(db, key);
   return { db, key, dataDir };
 }
 
@@ -268,6 +268,27 @@ function seed(db: DatabaseSync, key: Buffer) {
       ],
       grants: [["grant-sea-hmp", "hmp", "plan"]],
     });
+    insertIncident(db, key, {
+      id: "inc-order",
+      agencyId: "hmp",
+      reference: "PRV-HMP-ORDER",
+      kind: "public_order",
+      classification: "training",
+      status: "active",
+      createdBy: "commander",
+      secret: {
+        title: "Training — harbour protest march",
+        summary: "Exercise only. Planned foot protest from the ferry area toward the civic strip. Keep the march on route and protect nearby sites.",
+        locationLabel: "Devonport waterfront training sector",
+        lat: -36.8312,
+        lng: 174.7968,
+      },
+      members: [
+        ["commander", "lead"],
+        ["planner", "planner"],
+        ["field", "field"],
+      ],
+    });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -317,7 +338,7 @@ function insertIncident(
   }
 }
 
-function ensureOperationalExtras(db: DatabaseSync) {
+function ensureOperationalExtras(db: DatabaseSync, key: Buffer) {
   const now = new Date().toISOString();
   const units = db.prepare("SELECT COUNT(*) AS n FROM units").get() as { n: number };
   if (units.n === 0) {
@@ -336,6 +357,30 @@ function ensureOperationalExtras(db: DatabaseSync) {
   patch.run("CRC-S1", "crc-marine", "search");
   patch.run("CRC-W1", "crc-marine", "watch");
   patch.run("JOR-1", null, "registrar");
+  const order = db.prepare("SELECT id FROM incidents WHERE id = 'inc-order'").get() as { id: string } | undefined;
+  if (!order) {
+    insertIncident(db, key, {
+      id: "inc-order",
+      agencyId: "hmp",
+      reference: "PRV-HMP-ORDER",
+      kind: "public_order",
+      classification: "training",
+      status: "active",
+      createdBy: "commander",
+      secret: {
+        title: "Training — harbour protest march",
+        summary: "Exercise only. Planned foot protest from the ferry area toward the civic strip. Keep the march on route and protect nearby sites.",
+        locationLabel: "Devonport waterfront training sector",
+        lat: -36.8312,
+        lng: 174.7968,
+      },
+      members: [
+        ["commander", "lead"],
+        ["planner", "planner"],
+        ["field", "field"],
+      ],
+    });
+  }
 }
 
 export function openSecret<T>(key: Buffer, payload: string): T {

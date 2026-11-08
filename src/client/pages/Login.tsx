@@ -65,6 +65,7 @@ export function Login() {
           <li>The fewest road closures that seal a drawn area.</li>
           <li>A land search ring from the person, the time, and the ground.</li>
           <li>A marine datum from wind, current, and the vessel.</li>
+          <li>Public-order routes on foot, with resources held on the line of march.</li>
         </ol>
         <p>The models run here. They do not send a case to an external AI service.</p>
       </section>

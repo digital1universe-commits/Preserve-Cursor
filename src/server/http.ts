@@ -25,7 +25,7 @@ import {
 
 const EVALUATION_PASSWORD = "Harbour-Watch-1948";
 const SESSION_MS = 12 * 60 * 60 * 1000;
-const KINDS = new Set<IncidentKind>(["cordon", "containment", "land_sar", "marine_sar"]);
+const KINDS = new Set<IncidentKind>(["cordon", "containment", "land_sar", "marine_sar", "public_order"]);
 const CLASSIFICATIONS = new Set(["training", "official", "sensitive", "restricted"]);
 const STATUSES = new Set(["draft", "active", "contained", "suspended", "closed"]);
 

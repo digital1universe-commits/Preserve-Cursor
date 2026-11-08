@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { planContainment } from "./containment.js";
 import { planCordon } from "./cordon.js";
+import type { PathWay, ProtectedSite } from "./features.js";
 import { bboxOf, destination, expandBBox, haversineM, pointInPolygon } from "./geo.js";
 import { planLandSearch } from "./land.js";
 import { planMarineSearch } from "./marine.js";
 import { undirectedMinCut } from "./mincut.js";
+import { planPublicOrder } from "./public_order.js";
 import type { RoadWay } from "./roads.js";
 
 test("minimum cut seals the shared edge, not every upstream road", () => {
@@ -176,4 +178,53 @@ test("marine datum moves downwind and then with the current", () => {
     { windSpeedKn: 0, windFromDeg: 180, currentSpeedKn: 0, currentTowardDeg: 0, source: "manual" },
   );
   assert.ok(haversineM(lkp, calm.datum) < 50);
+});
+
+test("public order snaps a foot route and places side blocks and site protection", () => {
+  const start = { lat: -36.84, lng: 174.79 };
+  const mid = destination(start, 90, 400);
+  const end = destination(mid, 0, 350);
+  const spur = destination(mid, 180, 180);
+  const ways: RoadWay[] = [
+    { id: "1", name: "Main Street", highway: "residential", points: [start, mid, end] },
+    { id: "2", name: "Side Lane", highway: "residential", points: [mid, spur] },
+  ];
+  const paths: PathWay[] = [
+    {
+      id: "p1",
+      name: "Arcade",
+      kind: "pedestrian",
+      points: [destination(start, 45, 40), destination(mid, 225, 40)],
+    },
+  ];
+  const sites: ProtectedSite[] = [
+    { id: "s1", name: "Civic centre", kind: "government", position: destination(mid, 45, 60) },
+    { id: "s2", name: "Primary school", kind: "school", position: destination(end, 270, 50) },
+  ];
+  const plan = planPublicOrder({
+    start,
+    end,
+    ways,
+    paths,
+    sites,
+    resources: { serials: 10, traffic: 4, protection: 4, mobile: 2 },
+  });
+  assert.equal(plan.model, "preserve-public-order-v1");
+  assert.ok(plan.route.length >= 2);
+  assert.ok(plan.routeLengthM > 500);
+  assert.ok(plan.posts.some((post) => post.kind === "assembly"));
+  assert.ok(plan.posts.some((post) => post.kind === "dispersal"));
+  assert.ok(plan.posts.some((post) => post.kind === "side_block"));
+  assert.ok(plan.posts.some((post) => post.kind === "protect"));
+  assert.ok(plan.protectedNearRoute.length >= 1);
+
+  const drawn = planPublicOrder({
+    drawn: [start, destination(start, 70, 150), mid, end],
+    ways,
+    paths,
+    sites,
+  });
+  assert.equal(drawn.mode, "drawn");
+  assert.ok(drawn.snapped);
+  assert.ok(drawn.route.length >= 2);
 });

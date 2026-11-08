@@ -87,7 +87,7 @@ export function Brand({ compact = false }: { compact?: boolean }) {
       <svg viewBox="0 0 32 32" aria-hidden="true">
         <rect x="2" y="2" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.4" />
         <circle cx="16" cy="16" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
-        <path d="M10 16 H22" stroke="#e2a45a" strokeWidth="2" />
+        <path d="M10 16 H22" stroke="#e0b13a" strokeWidth="2" />
       </svg>
       <span>PRESERVE</span>
     </div>

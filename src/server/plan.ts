@@ -1,9 +1,10 @@
 import { planCordon } from "../engine/cordon.js";
 import { planContainment } from "../engine/containment.js";
-import type { PathWay, ParkArea, StreetLight } from "../engine/features.js";
+import type { PathWay, ParkArea, ProtectedSite, StreetLight } from "../engine/features.js";
 import { bboxOf, expandBBox, haversineM, type BBox } from "../engine/geo.js";
 import { planLandSearch, type ElevationSample, type LandInput } from "../engine/land.js";
 import { planMarineSearch, type MarineEnvironment } from "../engine/marine.js";
+import { planPublicOrder, publicOrderCoverage } from "../engine/public_order.js";
 import type { RoadWay } from "../engine/roads.js";
 import {
   asPolygon,
@@ -14,6 +15,7 @@ import {
   validateEnvironment,
   validateLandInput,
   validateMarineInput,
+  validatePublicOrderInput,
 } from "../engine/validate.js";
 import type { ModuleName } from "./rbac.js";
 import { fetchElevation, fetchMarineConditions } from "./environment.js";
@@ -25,6 +27,7 @@ export type PlanContext = {
   paths?: PathWay[];
   parks?: ParkArea[];
   lights?: StreetLight[];
+  sites?: ProtectedSite[];
   elevation?: ElevationSample[];
   environment?: MarineEnvironment;
   coverage?: BBox;
@@ -40,6 +43,7 @@ export async function executePlan(
   if (module === "containment") return runContainment(app, input, supplied.ways);
   if (module === "land_sar") return runLand(app, input, supplied.ways);
   if (module === "marine_sar") return runMarine(app, input, supplied.environment);
+  if (module === "public_order") return runPublicOrder(app, input, supplied.ways);
   throw new InputError("That planning module is not available.");
 }
 
@@ -71,6 +75,47 @@ async function runCordon(app: AppContext, input: unknown, suppliedWays: unknown)
       pathCount: loaded.paths.length,
       parkCount: loaded.parks.length,
       lightCount: loaded.lights.length,
+    },
+  };
+}
+
+async function runPublicOrder(app: AppContext, input: unknown, suppliedWays: unknown) {
+  const parsed = validatePublicOrderInput(input);
+  const points = parsed.drawn?.length
+    ? parsed.drawn
+    : ([parsed.start, parsed.end].filter(Boolean) as { lat: number; lng: number }[]);
+  const coverage = publicOrderCoverage(points, 450);
+  assertBox(coverage);
+  const loaded = await loadBundle(app, coverage, suppliedWays);
+  let output;
+  try {
+    output = planPublicOrder({
+      ...parsed,
+      ways: loaded.ways,
+      paths: loaded.paths,
+      sites: loaded.sites,
+    });
+  } catch (error) {
+    throw new InputError(error instanceof Error ? error.message : "The public order plan could not be built.");
+  }
+  return {
+    input: parsed,
+    output,
+    context: {
+      ways: loaded.ways,
+      paths: loaded.paths,
+      parks: loaded.parks,
+      lights: loaded.lights,
+      sites: loaded.sites,
+      coverage,
+    },
+    meta: {
+      roadSource: loaded.source,
+      roadCount: loaded.ways.length,
+      pathCount: loaded.paths.length,
+      siteCount: loaded.sites.length,
+      postCount: output.posts.length,
+      routeLengthM: output.routeLengthM,
     },
   };
 }
@@ -186,13 +231,20 @@ async function loadBundle(
   paths: PathWay[];
   parks: ParkArea[];
   lights: StreetLight[];
+  sites: ProtectedSite[];
   source: "live" | "cache" | "device" | "none";
 }> {
   const key = `osm:${coverage.south.toFixed(3)}:${coverage.west.toFixed(3)}:${coverage.north.toFixed(3)}:${coverage.east.toFixed(3)}`;
   try {
     const bundle = await fetchOsmBundle(coverage);
     const ways = thinWays(bundle.ways);
-    const packed = { ways, paths: bundle.paths, parks: bundle.parks, lights: bundle.lights };
+    const packed = {
+      ways,
+      paths: bundle.paths,
+      parks: bundle.parks,
+      lights: bundle.lights,
+      sites: bundle.sites,
+    };
     writeCache(app, key, "osm", JSON.stringify(packed));
     writeCache(
       app,
@@ -210,16 +262,22 @@ async function loadBundle(
         paths: PathWay[];
         parks: ParkArea[];
         lights: StreetLight[];
+        sites?: ProtectedSite[];
       };
-      return { ...packed, ways: thinWays(packed.ways), source: "cache" };
+      return {
+        ...packed,
+        ways: thinWays(packed.ways),
+        sites: packed.sites ?? [],
+        source: "cache",
+      };
     }
     try {
       const ways = thinWays(await fetchHighways(coverage));
-      return { ways, paths: [], parks: [], lights: [], source: "live" };
+      return { ways, paths: [], parks: [], lights: [], sites: [], source: "live" };
     } catch {
       const ways = safeWays(supplied);
-      if (ways.length) return { ways, paths: [], parks: [], lights: [], source: "device" };
-      return { ways: [], paths: [], parks: [], lights: [], source: "none" };
+      if (ways.length) return { ways, paths: [], parks: [], lights: [], sites: [], source: "device" };
+      return { ways: [], paths: [], parks: [], lights: [], sites: [], source: "none" };
     }
   }
 }

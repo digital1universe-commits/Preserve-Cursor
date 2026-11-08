@@ -65,10 +65,10 @@ function paint(x, y, size) {
   const dist = Math.hypot(dx, dy);
   const ring = dist > 0.2 && dist < 0.25;
   const bar = Math.abs(ny - 0.5) < 0.025 && nx > 0.3 && nx < 0.7;
-  if (bar) return [226, 164, 90, 255];
-  if (ring || edge) return [239, 232, 216, 255];
-  if (inFrame) return [18, 22, 18, 255];
-  return [18, 22, 18, 0];
+  if (bar) return [224, 177, 58, 255];
+  if (ring || edge) return [243, 246, 251, 255];
+  if (inFrame) return [10, 18, 32, 255];
+  return [10, 18, 32, 0];
 }
 
 for (const size of [192, 512]) {
@@ -78,8 +78,8 @@ for (const size of [192, 512]) {
 fs.writeFileSync(
   path.join(outDir, "favicon.svg"),
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect x="2" y="2" width="28" height="28" fill="#121612" stroke="#efe8d8" stroke-width="1.4"/>
-  <circle cx="16" cy="16" r="6.2" fill="none" stroke="#efe8d8" stroke-width="1.4"/>
-  <path d="M10 16 H22" stroke="#e2a45a" stroke-width="2"/>
+  <rect x="2" y="2" width="28" height="28" fill="#0a1220" stroke="#f3f6fb" stroke-width="1.4"/>
+  <circle cx="16" cy="16" r="6.2" fill="none" stroke="#f3f6fb" stroke-width="1.4"/>
+  <path d="M10 16 H22" stroke="#e0b13a" stroke-width="2"/>
 </svg>`,
 );

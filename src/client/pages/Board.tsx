@@ -203,5 +203,5 @@ export function Board() {
 
 function optionsFor(user: SessionUser) {
   if (user.role === "search_coordinator") return ["land_sar", "marine_sar"];
-  return ["cordon", "containment", "land_sar", "marine_sar"];
+  return ["cordon", "containment", "land_sar", "marine_sar", "public_order"];
 }

@@ -1,17 +1,17 @@
 :root {
-  --bg: #121612;
-  --bg-2: #1a201b;
-  --bg-3: #232a24;
-  --ink: #efe8d8;
-  --muted: #a39b8c;
-  --faint: #6f736a;
-  --line: rgba(239, 232, 216, 0.14);
-  --line-strong: rgba(239, 232, 216, 0.34);
-  --amber: #e2a45a;
-  --amber-ink: #24180c;
-  --green: #9cba86;
-  --red: #e07a68;
-  --water: #89c0cb;
+  --bg: #0a1220;
+  --bg-2: #121c2e;
+  --bg-3: #1a2740;
+  --ink: #f3f6fb;
+  --muted: #9aa7bc;
+  --faint: #6d7a90;
+  --line: rgba(243, 246, 251, 0.12);
+  --line-strong: rgba(243, 246, 251, 0.3);
+  --amber: #e0b13a;
+  --amber-ink: #1a1406;
+  --green: #7eb6d6;
+  --red: #e06b5c;
+  --water: #6eafc8;
   --font: "Source Sans 3", "Segoe UI", sans-serif;
   --display: "Barlow Condensed", "Arial Narrow", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -173,7 +173,7 @@ details summary { cursor: pointer; color: var(--muted); }
   display: flex;
   flex-direction: column;
   gap: 1.4rem;
-  background: #101410;
+  background: #070d18;
 }
 .sidenav nav, .bottomnav { display: flex; flex-direction: column; gap: 0.2rem; }
 .sidenav a, .bottomnav a {
@@ -208,12 +208,12 @@ details summary { cursor: pointer; color: var(--muted); }
 .seg button { background: transparent; border: 0; color: var(--muted); padding: 0.4rem 0.7rem; }
 .seg button.on { background: var(--amber); color: var(--amber-ink); }
 .strip {
-  background: #3a2a16;
+  background: #2a2110;
   color: var(--amber);
   padding: 0.45rem 1rem;
   font-size: 0.88rem;
 }
-.strip.quiet { background: #1c2420; color: var(--water); }
+.strip.quiet { background: #152033; color: var(--water); }
 .content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
 .bottomnav { display: none; }
 
@@ -261,7 +261,7 @@ details summary { cursor: pointer; color: var(--muted); }
   display: grid;
   grid-template-columns: minmax(0, 1fr) 420px;
 }
-.map-wrap { position: relative; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: #1a211c; }
+.map-wrap { position: relative; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: #0e1828; }
 .map-toolbar {
   justify-content: space-between;
   padding: 0.7rem 0.9rem 0.4rem;
@@ -270,7 +270,7 @@ details summary { cursor: pointer; color: var(--muted); }
 .map-toolbar h1 { font-size: clamp(1.6rem, 3vw, 2.4rem); max-width: 18ch; }
 .map-canvas { flex: 1; min-height: 0; }
 .map-note { margin: 0; padding: 0.35rem 0.8rem 0.5rem; font-size: 0.78rem; color: var(--faint); }
-.leaflet-container { background: #1a211c; font-family: var(--font); }
+.leaflet-container { background: #0e1828; font-family: var(--font); }
 .leaflet-div-icon.pin { background: transparent; border: 0; }
 .pin-face {
   display: inline-grid;
@@ -292,7 +292,7 @@ details summary { cursor: pointer; color: var(--muted); }
 .pin-datum, .pin-water { background: var(--water); color: #102026; border: 0; }
 .pin-rvp, .pin-command { border-color: var(--green); color: var(--green); }
 .pin-presence { border-color: var(--water); color: var(--water); }
-.pin-light { min-width: 1.1rem; background: #efe8d8; color: #24180c; border-color: #efe8d8; }
+.pin-light { min-width: 1.1rem; background: #f3f6fb; color: #0a1220; border-color: #f3f6fb; }
 .map-3d { min-height: 280px; }
 .map-toolbar-actions { flex-wrap: wrap; justify-content: flex-end; }
 
@@ -366,7 +366,7 @@ details summary { cursor: pointer; color: var(--muted); }
   .bottomnav {
     display: flex;
     flex-direction: row;
-    background: #101410;
+    background: #070d18;
     border-top: 1px solid var(--line);
     padding: 0.35rem 0.4rem calc(0.35rem + env(safe-area-inset-bottom));
     z-index: 20;

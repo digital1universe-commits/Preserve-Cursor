@@ -1,5 +1,5 @@
-import type { PathWay, ParkArea, StreetLight } from "../engine/features.js";
-import { isParkTag, pathKind } from "../engine/features.js";
+import type { PathWay, ParkArea, ProtectedSite, StreetLight } from "../engine/features.js";
+import { isParkTag, pathKind, siteFromTags } from "../engine/features.js";
 import type { BBox, LatLng } from "../engine/geo.js";
 import { isDriveableHighway, type RoadWay } from "../engine/roads.js";
 import { InputError } from "../engine/validate.js";
@@ -12,6 +12,7 @@ export type OsmBundle = {
   paths: PathWay[];
   parks: ParkArea[];
   lights: StreetLight[];
+  sites: ProtectedSite[];
 };
 
 export function parseOsmBundle(xml: string): OsmBundle {
@@ -45,6 +46,7 @@ export function parseOsmBundle(xml: string): OsmBundle {
   const paths: PathWay[] = [];
   const parks: ParkArea[] = [];
   const lights: StreetLight[] = [];
+  const sites: ProtectedSite[] = [];
 
   for (const [id, tags] of nodeTags) {
     const position = nodes.get(id);
@@ -52,6 +54,8 @@ export function parseOsmBundle(xml: string): OsmBundle {
     if (tags.get("highway") === "street_lamp" || tags.get("amenity") === "street_lamp") {
       lights.push({ id: `n${id}`, position, source: "osm" });
     }
+    const site = siteFromTags(`n${id}`, tags, position);
+    if (site) sites.push(site);
   }
 
   const wayRe = /<way id="(\d+)"[\s\S]*?<\/way>/g;
@@ -88,9 +92,15 @@ export function parseOsmBundle(xml: string): OsmBundle {
         points,
       });
     }
+
+    if (points.length) {
+      const mid = points[Math.floor(points.length / 2)];
+      const site = siteFromTags(`w${id}`, tags, mid);
+      if (site) sites.push(site);
+    }
   }
 
-  return { ways, paths, parks, lights };
+  return { ways, paths, parks, lights, sites };
 }
 
 export function parseOsmHighways(xml: string): RoadWay[] {
@@ -108,6 +118,7 @@ export async function fetchOsmBundle(box: BBox): Promise<OsmBundle> {
   const paths = new Map<string, PathWay>();
   const parks = new Map<string, ParkArea>();
   const lights = new Map<string, StreetLight>();
+  const sites = new Map<string, ProtectedSite>();
   for (const tile of tiles) {
     const query = `/api/0.6/map?bbox=${tile.west},${tile.south},${tile.east},${tile.north}`;
     const xml = await egressGet("api.openstreetmap.org", query);
@@ -122,12 +133,14 @@ export async function fetchOsmBundle(box: BBox): Promise<OsmBundle> {
     }
     for (const park of bundle.parks) parks.set(park.id, park);
     for (const light of bundle.lights) lights.set(light.id, light);
+    for (const site of bundle.sites) sites.set(site.id, site);
   }
   return {
     ways: [...ways.values()],
     paths: [...paths.values()],
     parks: [...parks.values()],
     lights: [...lights.values()],
+    sites: [...sites.values()],
   };
 }
 
