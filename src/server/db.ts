@@ -34,6 +34,7 @@ export function openContext(dataDir = process.env.PRESERVE_DATA_DIR || path.join
   db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   seed(db, key);
+  ensureOperationalExtras(db);
   return { db, key, dataDir };
 }
 
@@ -123,9 +124,47 @@ function migrate(db: DatabaseSync) {
       body TEXT NOT NULL,
       stored_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS units (
+      id TEXT PRIMARY KEY,
+      agency_id TEXT NOT NULL REFERENCES agencies(id),
+      name TEXT NOT NULL,
+      short_name TEXT NOT NULL,
+      conceal_from_agency INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      UNIQUE (agency_id, short_name)
+    );
+    CREATE TABLE IF NOT EXISTS presence (
+      user_id TEXT PRIMARY KEY REFERENCES users(id),
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      accuracy_m REAL,
+      heading REAL,
+      incident_id TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS agency_lights (
+      id TEXT PRIMARY KEY,
+      agency_id TEXT NOT NULL REFERENCES agencies(id),
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      label TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS incidents_agency ON incidents(agency_id, updated_at);
     CREATE INDEX IF NOT EXISTS audit_at ON audit_log(id DESC);
+    CREATE INDEX IF NOT EXISTS presence_updated ON presence(updated_at);
+    CREATE INDEX IF NOT EXISTS agency_lights_agency ON agency_lights(agency_id);
   `);
+  ensureColumn(db, "users", "callsign", "TEXT");
+  ensureColumn(db, "users", "unit_id", "TEXT");
+  ensureColumn(db, "users", "show_name", "INTEGER NOT NULL DEFAULT 0");
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (rows.some((row) => row.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function seed(db: DatabaseSync, key: Buffer) {
@@ -142,23 +181,29 @@ function seed(db: DatabaseSync, key: Buffer) {
     "INSERT INTO agencies (id, name, short_name, kind, home_lat, home_lng, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const insertUser = db.prepare(
-    `INSERT INTO users (id, agency_id, email, display_name, appointment, password_hash, role, active, evaluation, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)`,
+    `INSERT INTO users (id, agency_id, email, display_name, appointment, password_hash, role, active, evaluation, created_at, callsign, unit_id, show_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, 0)`,
+  );
+  const insertUnit = db.prepare(
+    "INSERT INTO units (id, agency_id, name, short_name, conceal_from_agency, created_at) VALUES (?, ?, ?, ?, ?, ?)",
   );
   db.exec("BEGIN");
   try {
     for (const agency of agencies) insertAgency.run(...agency, now);
-    const users: [string, string, string, string, string, Role][] = [
-      ["registrar", "jor", "registrar@preserve.test", "System registrar", "Registry", "superadmin"],
-      ["controller", "hmp", "controller@hmp.preserve.test", "Duty controller", "Duty controller", "agency_admin"],
-      ["commander", "hmp", "commander@hmp.preserve.test", "Incident commander", "Incident commander", "commander"],
-      ["planner", "hmp", "planner@hmp.preserve.test", "Tactical planner", "Tactical planner", "planner"],
-      ["field", "hmp", "field@hmp.preserve.test", "Field officer", "Field officer", "field_officer"],
-      ["search", "crc", "search@crc.preserve.test", "Search coordinator", "Search coordinator", "search_coordinator"],
-      ["watch", "crc", "watch@crc.preserve.test", "Watch officer", "Watch officer", "agency_admin"],
+    insertUnit.run("hmp-general", "hmp", "General duties", "GD", 0, now);
+    insertUnit.run("hmp-aos", "hmp", "Armed offenders", "AOS", 1, now);
+    insertUnit.run("crc-marine", "crc", "Marine desk", "MAR", 0, now);
+    const users: [string, string, string, string, string, Role, string, string][] = [
+      ["registrar", "jor", "registrar@preserve.test", "System registrar", "Registry", "superadmin", "JOR-1", ""],
+      ["controller", "hmp", "controller@hmp.preserve.test", "Duty controller", "Duty controller", "agency_admin", "HMP-CTRL", "hmp-general"],
+      ["commander", "hmp", "commander@hmp.preserve.test", "Incident commander", "Incident commander", "commander", "HMP-IC1", "hmp-general"],
+      ["planner", "hmp", "planner@hmp.preserve.test", "Tactical planner", "Tactical planner", "planner", "HMP-P1", "hmp-general"],
+      ["field", "hmp", "field@hmp.preserve.test", "Field officer", "Field officer", "field_officer", "HMP-F12", "hmp-general"],
+      ["search", "crc", "search@crc.preserve.test", "Search coordinator", "Search coordinator", "search_coordinator", "CRC-S1", "crc-marine"],
+      ["watch", "crc", "watch@crc.preserve.test", "Watch officer", "Watch officer", "agency_admin", "CRC-W1", "crc-marine"],
     ];
     for (const user of users) {
-      insertUser.run(user[0], user[1], user[2], user[3], user[4], password, user[5], now);
+      insertUser.run(user[0], user[1], user[2], user[3], user[4], password, user[5], now, user[6], user[7] || null);
     }
     insertIncident(db, key, {
       id: "inc-cordon",
@@ -270,6 +315,27 @@ function insertIncident(
   for (const [id, agencyId, permission] of incident.grants ?? []) {
     grant.run(id, incident.id, agencyId, permission, incident.createdBy, now);
   }
+}
+
+function ensureOperationalExtras(db: DatabaseSync) {
+  const now = new Date().toISOString();
+  const units = db.prepare("SELECT COUNT(*) AS n FROM units").get() as { n: number };
+  if (units.n === 0) {
+    const insertUnit = db.prepare(
+      "INSERT OR IGNORE INTO units (id, agency_id, name, short_name, conceal_from_agency, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    insertUnit.run("hmp-general", "hmp", "General duties", "GD", 0, now);
+    insertUnit.run("hmp-aos", "hmp", "Armed offenders", "AOS", 1, now);
+    insertUnit.run("crc-marine", "crc", "Marine desk", "MAR", 0, now);
+  }
+  const patch = db.prepare("UPDATE users SET callsign = COALESCE(NULLIF(callsign, ''), ?), unit_id = COALESCE(unit_id, ?) WHERE id = ?");
+  patch.run("HMP-IC1", "hmp-general", "commander");
+  patch.run("HMP-P1", "hmp-general", "planner");
+  patch.run("HMP-F12", "hmp-general", "field");
+  patch.run("HMP-CTRL", "hmp-general", "controller");
+  patch.run("CRC-S1", "crc-marine", "search");
+  patch.run("CRC-W1", "crc-marine", "watch");
+  patch.run("JOR-1", null, "registrar");
 }
 
 export function openSecret<T>(key: Buffer, payload: string): T {

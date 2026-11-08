@@ -41,6 +41,11 @@ type AuthUser = {
   homeLat: number;
   homeLng: number;
   evaluation: boolean;
+  callsign: string;
+  unitId: string | null;
+  unitShort: string | null;
+  unitConcealed: boolean;
+  showName: boolean;
 };
 
 type RequestContext = {
@@ -142,6 +147,10 @@ const routes: { method: string; pattern: string; auth: boolean; handler: Handler
   { method: "POST", pattern: "/api/incidents/:id/grants", auth: true, handler: addGrant },
   { method: "DELETE", pattern: "/api/incidents/:id/grants/:grantId", auth: true, handler: removeGrant },
   { method: "POST", pattern: "/api/incidents/:id/plans", auth: true, handler: createPlan },
+  { method: "PUT", pattern: "/api/presence", auth: true, handler: upsertPresence },
+  { method: "GET", pattern: "/api/presence", auth: true, handler: listPresence },
+  { method: "GET", pattern: "/api/lights", auth: true, handler: listLights },
+  { method: "POST", pattern: "/api/lights", auth: true, handler: createLight },
   { method: "GET", pattern: "/api/audit", auth: true, handler: auditList },
 ];
 
@@ -750,6 +759,9 @@ type UserRow = {
   role: Role;
   active: number;
   evaluation: number;
+  callsign?: string | null;
+  unit_id?: string | null;
+  show_name?: number | null;
   agency_name: string;
   agency_short: string;
   home_lat: number;
@@ -794,10 +806,18 @@ function presentUser(row: UserRow) {
     agencyId: row.agency_id,
     agencyName: row.agency_name,
     agencyShort: row.agency_short,
+    callsign: row.callsign || row.appointment,
+    unitId: row.unit_id || null,
+    showName: Boolean(row.show_name),
   };
 }
 
 function publicUser(row: UserRow, app: AppContext): AuthUser {
+  const unit = row.unit_id
+    ? (app.db.prepare("SELECT short_name, conceal_from_agency FROM units WHERE id = ?").get(row.unit_id) as
+        | { short_name: string; conceal_from_agency: number }
+        | undefined)
+    : undefined;
   return {
     id: row.id,
     email: row.email,
@@ -810,8 +830,162 @@ function publicUser(row: UserRow, app: AppContext): AuthUser {
     homeLat: row.home_lat,
     homeLng: row.home_lng,
     evaluation: Boolean(row.evaluation),
+    callsign: row.callsign || row.appointment,
+    unitId: row.unit_id || null,
+    unitShort: unit?.short_name || null,
+    unitConcealed: Boolean(unit?.conceal_from_agency),
+    showName: Boolean(row.show_name),
   };
-  void app;
+}
+
+function upsertPresence(ctx: RequestContext) {
+  const body = asObject(ctx.body);
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) throw new InputError("Latitude is not valid.");
+  if (!Number.isFinite(lng) || lng < -180 || lng > 180) throw new InputError("Longitude is not valid.");
+  const accuracy = body.accuracyM == null || body.accuracyM === "" ? null : Number(body.accuracyM);
+  const heading = body.heading == null || body.heading === "" ? null : Number(body.heading);
+  const incidentId = body.incidentId ? String(body.incidentId) : null;
+  const now = new Date().toISOString();
+  ctx.app.db
+    .prepare(
+      `INSERT INTO presence (user_id, lat, lng, accuracy_m, heading, incident_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, accuracy_m = excluded.accuracy_m,
+         heading = excluded.heading, incident_id = excluded.incident_id, updated_at = excluded.updated_at`,
+    )
+    .run(ctx.user!.id, lat, lng, Number.isFinite(accuracy as number) ? accuracy : null, Number.isFinite(heading as number) ? heading : null, incidentId, now);
+  send(ctx.res, 200, { ok: true, updatedAt: now });
+}
+
+function listPresence(ctx: RequestContext) {
+  const scope = String(ctx.url.searchParams.get("scope") || "incident");
+  const incidentId = ctx.url.searchParams.get("incidentId");
+  const viewer = ctx.user!;
+  const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const rows = ctx.app.db
+    .prepare(
+      `SELECT p.user_id, p.lat, p.lng, p.accuracy_m, p.heading, p.incident_id, p.updated_at,
+              u.display_name, u.appointment, u.callsign, u.show_name, u.unit_id, u.agency_id,
+              un.short_name AS unit_short, un.conceal_from_agency
+       FROM presence p
+       JOIN users u ON u.id = p.user_id
+       LEFT JOIN units un ON un.id = u.unit_id
+       WHERE p.updated_at >= ?`,
+    )
+    .all(cutoff) as {
+    user_id: string;
+    lat: number;
+    lng: number;
+    accuracy_m: number | null;
+    heading: number | null;
+    incident_id: string | null;
+    updated_at: string;
+    display_name: string;
+    appointment: string;
+    callsign: string | null;
+    show_name: number | null;
+    unit_id: string | null;
+    agency_id: string;
+    unit_short: string | null;
+    conceal_from_agency: number | null;
+  }[];
+
+  const memberIds = new Set<string>();
+  if (incidentId) {
+    const members = ctx.app.db.prepare("SELECT user_id FROM incident_members WHERE incident_id = ?").all(incidentId) as { user_id: string }[];
+    for (const member of members) memberIds.add(member.user_id);
+  }
+
+  const visible = rows.filter((row) => {
+    if (row.user_id === viewer.id) return true;
+    const concealed = Boolean(row.conceal_from_agency);
+    const sameUnit = Boolean(viewer.unitId && row.unit_id && viewer.unitId === row.unit_id);
+    if (concealed && !sameUnit) {
+      // Private units stay hidden from the wider organisation, but remain visible to colleagues on the same incident.
+      if (!(scope === "incident" && incidentId && memberIds.has(row.user_id) && memberIds.has(viewer.id))) return false;
+    }
+    if (scope === "agency") return row.agency_id === viewer.agencyId;
+    if (scope === "incident") {
+      if (!incidentId) return false;
+      if (memberIds.has(row.user_id)) return true;
+      return row.agency_id === viewer.agencyId && row.incident_id === incidentId;
+    }
+    return false;
+  });
+
+  send(ctx.res, 200, {
+    scope,
+    positions: visible.map((row) => ({
+      userId: row.user_id,
+      callsign: row.callsign || row.appointment,
+      name: row.show_name ? row.display_name : undefined,
+      appointment: row.appointment,
+      unitShort: row.unit_short,
+      lat: row.lat,
+      lng: row.lng,
+      accuracyM: row.accuracy_m,
+      heading: row.heading,
+      incidentId: row.incident_id,
+      updatedAt: row.updated_at,
+      self: row.user_id === viewer.id,
+    })),
+  });
+}
+
+function listLights(ctx: RequestContext) {
+  const south = Number(ctx.url.searchParams.get("south"));
+  const west = Number(ctx.url.searchParams.get("west"));
+  const north = Number(ctx.url.searchParams.get("north"));
+  const east = Number(ctx.url.searchParams.get("east"));
+  if (![south, west, north, east].every(Number.isFinite)) throw new InputError("A map box is required for lights.");
+  const agency = ctx.app.db
+    .prepare(
+      `SELECT id, lat, lng, label FROM agency_lights
+       WHERE agency_id = ? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`,
+    )
+    .all(ctx.user!.agencyId, south, north, west, east) as { id: string; lat: number; lng: number; label: string | null }[];
+  const cached = ctx.app.db
+    .prepare("SELECT body FROM cache WHERE kind = 'osm' ORDER BY stored_at DESC LIMIT 8")
+    .all() as { body: string }[];
+  const osm: { id: string; lat: number; lng: number }[] = [];
+  for (const row of cached) {
+    try {
+      const packed = JSON.parse(row.body) as { lights?: { id: string; position: { lat: number; lng: number } }[] };
+      for (const light of packed.lights ?? []) {
+        if (light.position.lat < south || light.position.lat > north || light.position.lng < west || light.position.lng > east) continue;
+        osm.push({ id: light.id, lat: light.position.lat, lng: light.position.lng });
+      }
+    } catch {
+      /* ignore bad cache rows */
+    }
+  }
+  send(ctx.res, 200, {
+    lights: [
+      ...agency.map((light) => ({ id: light.id, lat: light.lat, lng: light.lng, label: light.label || "Agency light", source: "agency" as const })),
+      ...osm.map((light) => ({ id: light.id, lat: light.lat, lng: light.lng, label: "Street light", source: "osm" as const })),
+    ],
+  });
+}
+
+function createLight(ctx: RequestContext) {
+  const role = ctx.user!.role;
+  if (role !== "superadmin" && role !== "agency_admin" && role !== "commander" && role !== "planner") {
+    send(ctx.res, 403, { error: "Your role cannot add agency lights." });
+    return;
+  }
+  const body = asObject(ctx.body);
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new InputError("A light needs a position.");
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  ctx.app.db
+    .prepare("INSERT INTO agency_lights (id, agency_id, lat, lng, label, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(id, ctx.user!.agencyId, lat, lng, body.label ? String(body.label).slice(0, 80) : "Agency light", ctx.user!.id, now);
+  writeAudit(ctx, "light.create", "light", id, "Added an agency street light.");
+  send(ctx.res, 201, { id, lat, lng, label: body.label || "Agency light", source: "agency" });
 }
 
 function userFromRequest(app: AppContext, req: http.IncomingMessage): AuthUser | null {

@@ -156,10 +156,12 @@ export function OperationMap(props: Props) {
 
 function toneColor(tone: string) {
   if (tone === "water" || tone === "drift") return "#89c0cb";
-  if (tone === "inner") return "#e2a45a";
+  if (tone === "inner" || tone === "scene") return "#e2a45a";
   if (tone === "outer") return "#efe8d8";
   if (tone === "area") return "#e2a45a";
   if (tone === "search") return "#9cba86";
+  if (tone === "presence") return "#e2a45a";
+  if (tone === "light") return "#efe8d8";
   if (tone === "hot") return "#e07a68";
   return "#efe8d8";
 }

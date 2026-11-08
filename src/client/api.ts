@@ -37,6 +37,26 @@ export type SessionUser = {
   homeLat: number;
   homeLng: number;
   evaluation: boolean;
+  callsign: string;
+  unitId: string | null;
+  unitShort: string | null;
+  unitConcealed: boolean;
+  showName: boolean;
+};
+
+export type PresencePin = {
+  userId: string;
+  callsign: string;
+  name?: string;
+  appointment: string;
+  unitShort: string | null;
+  lat: number;
+  lng: number;
+  accuracyM: number | null;
+  heading: number | null;
+  incidentId: string | null;
+  updatedAt: string;
+  self: boolean;
 };
 
 export type IncidentSummary = {

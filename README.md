@@ -6,7 +6,10 @@ This build ships evaluation accounts so the desk can be reviewed. Remove them be
 
 ## What it plans
 
-- **Siege cordon.** Inner and outer rings, observation posts, traffic points, a rendezvous, and a command point. Posts are containment and observation. A reported firearm risk only increases standoff.
+- **Siege cordon.** Surround the scene on four sides from the structure footprint (or an estimate from structure type). Seal the fewest streets that stop driveable escape from the local sector. List parks, walkways, alleys, and easements to search so a person on foot cannot leave without meeting police. Posts can be locked so a rebuild keeps ground truth. A reported firearm risk only increases standoff. The model does not invent an approach onto the subject.
+- **Live units.** GPS starts when the desk opens. Positions update about every 10 seconds while moving, and less often when still. Pins show callsigns (names optional). View this incident or the whole agency. Units marked private stay hidden from the wider organisation and only see each other (they remain visible to colleagues on a shared incident).
+- **3D terrain.** Pitch and circle the ground to judge elevation and vantage. Terrain tiles learn the bbox being viewed — same OPSEC rule as flat map tiles.
+- **Street lights.** Toggle OSM lamps plus agency-added lights on every module.
 - **Area seal.** Draw the area. The desk loads the surrounding driveable roads and places the fewest closure sites that leave no driveable path out to the open network. Footpaths are not sealed. One-way restrictions are ignored. A vehicle can still be on a street inside the closures.
 - **Land search.** Last known point, age, mental state, knowledge of the area, mobility, terrain, and time missing. The ring is an original behavioural estimate: people move toward the easier ground, and the search area grows with time and then fatigues. It is not a copy of a published lost-person distance table.
 - **Marine search.** Last known position, time adrift, and vessel type. On the link, the desk requests only the coordinates from the weather and marine services, then places a datum from wind leeway and current. The leeway fractions are original to this desk.

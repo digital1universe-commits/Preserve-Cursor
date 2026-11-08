@@ -79,18 +79,29 @@ test("a point in a square is classified correctly", () => {
   assert.equal(pointInPolygon({ lat: 1.5, lng: 0.5 }, square), false);
 });
 
-test("cordon keeps firearm posts back and does not invent an approach", () => {
+test("cordon surrounds four faces, seals escape, and does not invent an approach", () => {
+  const subject = { lat: -36.85, lng: 174.8 };
   const plan = planCordon({
-    subject: { lat: -36.85, lng: 174.8 },
+    subject,
     structure: "detached",
-    exits: 4,
     risk: "firearm",
   });
-  assert.ok(plan.innerRadiusM >= 100);
-  assert.ok(plan.outerRadiusM >= 400);
-  assert.ok(plan.posts.filter((post) => post.kind === "inner").length >= 4);
+  assert.ok(plan.standoffM >= 90);
+  assert.ok(plan.escapeRadiusM >= 650);
+  assert.equal(plan.posts.filter((post) => post.kind === "scene").length, 4);
   assert.ok(plan.posts.some((post) => post.kind === "rvp"));
   assert.match(plan.riskNote, /does not describe an approach/i);
+
+  const locked = plan.posts.find((post) => post.id === "SC-1")!;
+  const again = planCordon({
+    subject,
+    structure: "detached",
+    risk: "firearm",
+    lockedPosts: [{ ...locked, position: destination(subject, 10, 120), locked: true }],
+  });
+  const kept = again.posts.find((post) => post.id === "SC-1");
+  assert.ok(kept?.locked);
+  assert.ok(haversineM(kept!.position, destination(subject, 10, 120)) < 1);
 });
 
 test("land search shrinks with time and mobility and leans downhill", () => {

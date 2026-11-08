@@ -100,10 +100,19 @@ export function asWays(value: unknown): RoadWay[] {
 export function validateCordonInput(value: unknown): {
   subject: LatLng;
   structure: StructureKind;
-  exits: number;
   risk: SubjectRisk;
-  innerRadiusM?: number;
-  outerRadiusM?: number;
+  footprint?: LatLng[];
+  escapeRadiusM?: number;
+  lockedPosts?: {
+    id: string;
+    kind: "scene" | "escape" | "search" | "rvp" | "command";
+    position: LatLng;
+    label: string;
+    side?: "north" | "east" | "south" | "west";
+    locked?: boolean;
+    sectorBearing?: number;
+    rationale: string;
+  }[];
 } {
   const input = record(value);
   const structures = new Set(["detached", "commercial", "multi_storey", "open_ground"]);
@@ -112,17 +121,39 @@ export function validateCordonInput(value: unknown): {
   const risk = String(input.risk ?? "");
   if (!structures.has(structure)) throw new InputError("Choose the kind of structure.");
   if (!risks.has(risk)) throw new InputError("Choose the reported risk.");
-  const exits = Number(input.exits ?? 4);
-  if (!Number.isFinite(exits) || exits < 1 || exits > 12) throw new InputError("Exits must be between 1 and 12.");
-  const inner = optionalNumber(input.innerRadiusM, 20, 400, "Inner radius");
-  const outer = optionalNumber(input.outerRadiusM, 80, 2000, "Outer radius");
+  const escapeRadiusM = optionalNumber(input.escapeRadiusM, 180, 1200, "Escape sector");
+  let footprint: LatLng[] | undefined;
+  if (input.footprint != null) {
+    if (!Array.isArray(input.footprint) || input.footprint.length < 3) {
+      throw new InputError("Draw at least three corners for the scene footprint.");
+    }
+    footprint = input.footprint.map((point, index) => asPoint(point, `Footprint corner ${index + 1}`));
+  }
+  const lockedPosts = Array.isArray(input.lockedPosts)
+    ? input.lockedPosts.map((raw, index) => {
+        const post = record(raw);
+        const kinds = new Set(["scene", "escape", "search", "rvp", "command"]);
+        const kind = String(post.kind ?? "");
+        if (!kinds.has(kind)) throw new InputError(`Locked post ${index + 1} has an unknown kind.`);
+        return {
+          id: String(post.id || `locked-${index + 1}`),
+          kind: kind as "scene" | "escape" | "search" | "rvp" | "command",
+          position: asPoint(post.position, `Locked post ${index + 1}`),
+          label: String(post.label || post.id || `Locked ${index + 1}`),
+          side: post.side as "north" | "east" | "south" | "west" | undefined,
+          locked: true,
+          sectorBearing: typeof post.sectorBearing === "number" ? post.sectorBearing : undefined,
+          rationale: String(post.rationale || "Locked by the commander."),
+        };
+      })
+    : undefined;
   return {
     subject: asPoint(input.subject, "Subject"),
     structure: structure as StructureKind,
-    exits,
     risk: risk as SubjectRisk,
-    innerRadiusM: inner,
-    outerRadiusM: outer,
+    footprint,
+    escapeRadiusM,
+    lockedPosts,
   };
 }
 
@@ -256,7 +287,7 @@ function optionalNumber(value: unknown, min: number, max: number, label: string)
 }
 
 export function isCordonPlan(value: unknown): value is CordonPlan {
-  return Boolean(value && typeof value === "object" && (value as CordonPlan).model === "preserve-cordon-v1");
+  return Boolean(value && typeof value === "object" && (value as CordonPlan).model === "preserve-cordon-v2");
 }
 
 export function isContainmentPlan(value: unknown): value is ContainmentPlan {

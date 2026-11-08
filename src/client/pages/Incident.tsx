@@ -8,7 +8,10 @@ import { useAuth } from "../auth";
 import { CLASS_LABEL, coord, formatKm, formatNm, formatWhen, KIND_LABEL, STATUS_LABEL } from "../format";
 import { runOnDevice, type DeviceContext } from "../local";
 import { OperationMap, type MapMarker } from "../map";
+import { Map3D } from "../map3d";
 import { kvGet, kvSet, outboxAdd } from "../offline";
+import { fetchPresence, type PresenceScope } from "../presence";
+import type { PresencePin } from "../api";
 
 const MODULES = ["cordon", "containment", "land_sar", "marine_sar", "record"] as const;
 const TRAINING_AREA: LatLng[] = [
@@ -18,13 +21,25 @@ const TRAINING_AREA: LatLng[] = [
   { lat: -36.8335, lng: 174.7925 },
 ];
 
+type LockedPost = {
+  id: string;
+  kind: "scene" | "escape" | "search" | "rvp" | "command";
+  position: LatLng;
+  label: string;
+  side?: "north" | "east" | "south" | "west";
+  locked: true;
+  sectorBearing?: number;
+  rationale: string;
+};
+
 type CordonForm = {
   subject: LatLng;
   structure: string;
-  exits: string;
   risk: string;
-  innerRadiusM: string;
-  outerRadiusM: string;
+  escapeRadiusM: string;
+  footprint: LatLng[];
+  footprintClosed: boolean;
+  lockedPosts: LockedPost[];
 };
 type LandForm = {
   category: SubjectCategory;
@@ -69,6 +84,12 @@ export function IncidentPage() {
   const [land, setLand] = useState<LandForm | null>(null);
   const [marine, setMarine] = useState<MarineForm | null>(null);
   const [context, setContext] = useState<DeviceContext>({});
+  const [mapMode, setMapMode] = useState<"flat" | "terrain">("flat");
+  const [showLights, setShowLights] = useState(false);
+  const [showPeople, setShowPeople] = useState(true);
+  const [presenceScope, setPresenceScope] = useState<PresenceScope>("incident");
+  const [people, setPeople] = useState<PresencePin[]>([]);
+  const [lights, setLights] = useState<{ id: string; lat: number; lng: number; label: string; source: string }[]>([]);
 
   useEffect(() => {
     let stop = false;
@@ -84,7 +105,15 @@ export function IncidentPage() {
         if (auth.online) await kvSet(`incident:${id}`, data);
         setModule(data.incident.kind);
         const point = { lat: data.incident.lat, lng: data.incident.lng };
-        setCordon({ subject: point, structure: "detached", exits: "4", risk: "unknown", innerRadiusM: "", outerRadiusM: "" });
+        setCordon({
+          subject: point,
+          structure: "detached",
+          risk: "unknown",
+          escapeRadiusM: "",
+          footprint: [],
+          footprintClosed: true,
+          lockedPosts: [],
+        });
         setLand({
           category: "general_adult",
           ageYears: "",
@@ -139,15 +168,81 @@ export function IncidentPage() {
     return { lat: -36.83, lng: 174.8 };
   }, [module, polygon, land, marine, cordon, detail]);
 
-  const graphics = useMemo(() => graphicsFor(module, plan, cordon, land, marine, polygon, polygonClosed), [
-    module,
-    plan,
-    cordon,
-    land,
-    marine,
-    polygon,
-    polygonClosed,
-  ]);
+  useEffect(() => {
+    if (!auth.online || !showPeople) {
+      setPeople([]);
+      return;
+    }
+    let stop = false;
+    async function load() {
+      try {
+        const positions = await fetchPresence(presenceScope, id);
+        if (!stop) setPeople(positions);
+      } catch {
+        if (!stop) setPeople([]);
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 10_000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [auth.online, showPeople, presenceScope, id]);
+
+  useEffect(() => {
+    if (!auth.online || !showLights || !center) {
+      setLights([]);
+      return;
+    }
+    let stop = false;
+    const pad = 0.01;
+    const query = new URLSearchParams({
+      south: String(center.lat - pad),
+      west: String(center.lng - pad),
+      north: String(center.lat + pad),
+      east: String(center.lng + pad),
+    });
+    api<{ lights: { id: string; lat: number; lng: number; label: string; source: string }[] }>(`/api/lights?${query}`)
+      .then((data) => {
+        if (!stop) setLights(data.lights);
+      })
+      .catch(() => {
+        if (!stop) setLights(context.lights?.map((light) => ({ id: light.id, lat: light.position.lat, lng: light.position.lng, label: "Street light", source: light.source })) ?? []);
+      });
+    return () => {
+      stop = true;
+    };
+  }, [auth.online, showLights, center, context.lights]);
+
+  const graphics = useMemo(() => {
+    const base = graphicsFor(module, plan, cordon, land, marine, polygon, polygonClosed);
+    if (showPeople) {
+      for (const person of people) {
+        base.markers.push({
+          id: `unit-${person.userId}`,
+          lat: person.lat,
+          lng: person.lng,
+          label: person.callsign,
+          tone: "presence",
+          detail: person.name ? `${person.callsign} · ${person.name}` : person.callsign,
+        });
+      }
+    }
+    if (showLights) {
+      for (const light of lights) {
+        base.markers.push({
+          id: `light-${light.id}`,
+          lat: light.lat,
+          lng: light.lng,
+          label: "LT",
+          tone: "light",
+          detail: `${light.label} (${light.source})`,
+        });
+      }
+    }
+    return base;
+  }, [module, plan, cordon, land, marine, polygon, polygonClosed, showPeople, people, showLights, lights]);
 
   function onMapClick(point: LatLng) {
     if (!detail?.can.plan[module]) return;
@@ -156,7 +251,11 @@ export function IncidentPage() {
       setPolygon((current) => [...current, point]);
       return;
     }
-    if (module === "cordon" && cordon) setCordon({ ...cordon, subject: point });
+    if (module === "cordon" && cordon) {
+      if (!cordon.footprintClosed) setCordon({ ...cordon, footprint: [...cordon.footprint, point] });
+      else setCordon({ ...cordon, subject: point });
+      return;
+    }
     if (module === "land_sar" && land) setLand({ ...land, lkp: point });
     if (module === "marine_sar" && marine) setMarine({ ...marine, lkp: point });
   }
@@ -264,29 +363,53 @@ export function IncidentPage() {
           </div>
           <div className="map-toolbar-actions">
             <span className={`classmark ${detail.incident.classification}`}>{CLASS_LABEL[detail.incident.classification]}</span>
+            <button type="button" className={mapMode === "terrain" ? "text-button on" : "text-button"} onClick={() => setMapMode((value) => (value === "flat" ? "terrain" : "flat"))}>
+              {mapMode === "terrain" ? "Flat map" : "3D terrain"}
+            </button>
+            <button type="button" className={showPeople ? "text-button on" : "text-button"} onClick={() => setShowPeople((value) => !value)}>
+              Units
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              disabled={!showPeople}
+              onClick={() => setPresenceScope((value) => (value === "incident" ? "agency" : "incident"))}
+            >
+              {presenceScope === "incident" ? "This incident" : "Whole agency"}
+            </button>
+            <button type="button" className={showLights ? "text-button on" : "text-button"} onClick={() => setShowLights((value) => !value)}>
+              Street lights
+            </button>
             <button type="button" className={tiles ? "text-button" : "text-button on"} onClick={() => setTiles((value) => !value)}>
               {tiles ? "Grid only" : "Show map"}
             </button>
           </div>
         </div>
-        <OperationMap
-          center={center}
-          zoom={module === "marine_sar" ? 11 : module === "land_sar" ? 13 : 15}
-          frame={frame}
-          tiles={tiles && auth.link}
-          tileUrl={tileUrl}
-          attribution="© OpenStreetMap"
-          markers={graphics.markers}
-          circles={graphics.circles}
-          polygons={graphics.polygons}
-          lines={graphics.lines}
-          heat={graphics.heat}
-          onClick={onMapClick}
-        />
+        {mapMode === "flat" ? (
+          <OperationMap
+            center={center}
+            zoom={module === "marine_sar" ? 11 : module === "land_sar" ? 13 : 15}
+            frame={frame}
+            tiles={tiles && auth.link}
+            tileUrl={tileUrl}
+            attribution="© OpenStreetMap"
+            markers={graphics.markers}
+            circles={graphics.circles}
+            polygons={graphics.polygons}
+            lines={graphics.lines}
+            heat={graphics.heat}
+            onClick={onMapClick}
+          />
+        ) : (
+          <Map3D enabled center={center} markers={graphics.markers} polygons={graphics.polygons} />
+        )}
         <p className="map-note">
-          {tiles
-            ? "Tiles show the ground only. Switch to grid if the area being viewed must not be requested."
-            : "Grid only. No new map tiles are being requested."}
+          {mapMode === "terrain"
+            ? "3D terrain uses elevation tiles for the viewed area. Use it to judge height and vantage. Circle with pitch and bearing controls."
+            : tiles
+              ? "Tiles show the ground only. Switch to grid if the area being viewed must not be requested."
+              : "Grid only. No new map tiles are being requested."}
+          {showPeople ? ` Live units: ${presenceScope === "incident" ? "this incident" : "agency"} (private units stay hidden from the wider organisation).` : ""}
         </p>
       </div>
       <aside className="panel">
@@ -320,8 +443,17 @@ export function IncidentPage() {
                 form={cordon}
                 setForm={setCordon}
                 disabled={!allowed}
+                plan={plan && plan.module === "cordon" ? plan : null}
                 onTraining={() => {
-                  setCordon({ ...cordon, subject: { lat: -36.8297, lng: 174.7964 }, structure: "commercial", exits: "3", risk: "unknown" });
+                  setCordon({
+                    ...cordon,
+                    subject: { lat: -36.8297, lng: 174.7964 },
+                    structure: "commercial",
+                    risk: "unknown",
+                    escapeRadiusM: "500",
+                    footprint: [],
+                    footprintClosed: true,
+                  });
                   setFrame((value) => value + 1);
                 }}
               />
@@ -384,15 +516,56 @@ function CordonFields({
   setForm,
   disabled,
   onTraining,
+  plan,
 }: {
   form: CordonForm;
   setForm: (form: CordonForm) => void;
   disabled: boolean;
   onTraining: () => void;
+  plan: PlanRecord | null;
 }) {
+  const posts = ((plan?.output as { posts?: { id: string; kind: string; label: string; position: LatLng; side?: string; sectorBearing?: number; rationale: string; locked?: boolean }[] } | null)?.posts ?? []);
   return (
     <div className="stack">
-      <p className="hint">Click the map to move the subject. Posts are containment and observation, not an approach.</p>
+      <p className="hint">
+        Click the map for the scene footprint corners, then close it. After that, clicks move the subject. The model surrounds the scene on four sides, blocks the fewest streets that seal escape, and lists parks, alleys, and walkways to search.
+      </p>
+      <div className="row-actions">
+        <button
+          type="button"
+          className={form.footprintClosed && !form.footprint.length ? "text-button" : "text-button on"}
+          disabled={disabled}
+          onClick={() => setForm({ ...form, footprint: [], footprintClosed: false })}
+        >
+          Draw footprint
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          disabled={disabled || !form.footprint.length}
+          onClick={() => setForm({ ...form, footprint: form.footprint.slice(0, -1), footprintClosed: false })}
+        >
+          Undo corner
+        </button>
+        <button type="button" className="text-button" disabled={disabled} onClick={() => setForm({ ...form, footprint: [], footprintClosed: true })}>
+          Clear footprint
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          disabled={disabled || form.footprint.length < 3}
+          onClick={() => setForm({ ...form, footprintClosed: true })}
+        >
+          Close footprint
+        </button>
+      </div>
+      <p className="hint">
+        {form.footprintClosed
+          ? form.footprint.length
+            ? "Footprint closed. Clicks move the subject."
+            : "Clicks move the subject. Draw a footprint if the structure outline matters, or leave it empty and the model will estimate from the structure type."
+          : `${form.footprint.length} corner${form.footprint.length === 1 ? "" : "s"} — click the map to add more, then close.`}
+      </p>
       <div className="split">
         <label>
           Structure
@@ -404,8 +577,13 @@ function CordonFields({
           </select>
         </label>
         <label>
-          Exits
-          <input disabled={disabled} value={form.exits} onChange={(event) => setForm({ ...form, exits: event.target.value })} />
+          Escape sector m
+          <input
+            disabled={disabled}
+            value={form.escapeRadiusM}
+            placeholder="Model"
+            onChange={(event) => setForm({ ...form, escapeRadiusM: event.target.value })}
+          />
         </label>
       </div>
       <label>
@@ -417,16 +595,54 @@ function CordonFields({
           <option value="firearm">Firearm</option>
         </select>
       </label>
-      <div className="split">
-        <label>
-          Inner m
-          <input disabled={disabled} value={form.innerRadiusM} placeholder="Model" onChange={(event) => setForm({ ...form, innerRadiusM: event.target.value })} />
-        </label>
-        <label>
-          Outer m
-          <input disabled={disabled} value={form.outerRadiusM} placeholder="Model" onChange={(event) => setForm({ ...form, outerRadiusM: event.target.value })} />
-        </label>
-      </div>
+      {posts.length > 0 && (
+        <div className="stack">
+          <h3>Posts</h3>
+          <p className="hint">Lock a post after you have committed it on the ground. A rebuild keeps locked posts.</p>
+          <ul className="plain">
+            {posts.map((post) => {
+              const locked = form.lockedPosts.some((item) => item.id === post.id);
+              return (
+                <li key={post.id}>
+                  <span>
+                    <strong>{post.id}</strong>
+                    <small>{post.kind}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className={locked ? "text-button on" : "text-button"}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (locked) {
+                        setForm({ ...form, lockedPosts: form.lockedPosts.filter((item) => item.id !== post.id) });
+                      } else {
+                        setForm({
+                          ...form,
+                          lockedPosts: [
+                            ...form.lockedPosts.filter((item) => item.id !== post.id),
+                            {
+                              id: post.id,
+                              kind: post.kind as LockedPost["kind"],
+                              position: post.position,
+                              label: post.label,
+                              side: post.side as LockedPost["side"],
+                              locked: true,
+                              sectorBearing: post.sectorBearing,
+                              rationale: post.rationale,
+                            },
+                          ],
+                        });
+                      }
+                    }}
+                  >
+                    {locked ? "Locked" : "Lock"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       <button type="button" className="text-button" onClick={onTraining}>
         Training subject
       </button>
@@ -615,6 +831,7 @@ function Briefing({ plan }: { plan: PlanRecord }) {
     actions?: string[];
     posts?: { id: string; label: string; rationale: string }[];
     closures?: { id: string; roadName: string; seals: number; rationale: string }[];
+    searchTasks?: { id: string; kind: string; name: string; rationale: string }[];
     wedges?: { id: string; priority: number; fromBearing: number; toBearing: number }[];
     radius50M?: number;
     radius95M?: number;
@@ -627,6 +844,8 @@ function Briefing({ plan }: { plan: PlanRecord }) {
     closureCount?: number;
     exitCorridors?: number;
     minimumGuaranteed?: boolean;
+    standoffM?: number;
+    escapeRadiusM?: number;
   };
   return (
     <article className="briefing">
@@ -634,6 +853,13 @@ function Briefing({ plan }: { plan: PlanRecord }) {
       <h2>Briefing</h2>
       <p className="disclaimer">Planning aid. It does not authorise a tactic, and it does not replace the incident commander.</p>
       {output.riskNote && <p>{output.riskNote}</p>}
+      {output.standoffM != null && (
+        <p className="stat">
+          Scene standoff <strong>{output.standoffM} m</strong> · escape sector <strong>{output.escapeRadiusM} m</strong> ·{" "}
+          <strong>{output.closures?.length ?? 0}</strong> street block{(output.closures?.length ?? 0) === 1 ? "" : "s"} ·{" "}
+          <strong>{output.searchTasks?.length ?? 0}</strong> search task{(output.searchTasks?.length ?? 0) === 1 ? "" : "s"}
+        </p>
+      )}
       {output.closureCount != null && (
         <p className="stat">
           <strong>{output.closureCount}</strong> closure sites for <strong>{output.exitCorridors}</strong> exit corridors
@@ -664,7 +890,22 @@ function Briefing({ plan }: { plan: PlanRecord }) {
           ))}
         </ol>
       )}
-      {output.closures && (
+      {output.searchTasks && output.searchTasks.length > 0 && (
+        <>
+          <h3>Search tasks</h3>
+          <ol>
+            {output.searchTasks.map((task) => (
+              <li key={task.id}>
+                <strong>
+                  {task.name} ({task.kind})
+                </strong>{" "}
+                {task.rationale}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      {output.closures && plan.module === "containment" && (
         <ol>
           {output.closures.map((site) => (
             <li key={site.id}>
@@ -865,10 +1106,10 @@ function inputFor(
     return {
       subject: cordon.subject,
       structure: cordon.structure,
-      exits: Number(cordon.exits),
       risk: cordon.risk,
-      innerRadiusM: cordon.innerRadiusM ? Number(cordon.innerRadiusM) : undefined,
-      outerRadiusM: cordon.outerRadiusM ? Number(cordon.outerRadiusM) : undefined,
+      escapeRadiusM: cordon.escapeRadiusM ? Number(cordon.escapeRadiusM) : undefined,
+      footprint: cordon.footprintClosed && cordon.footprint.length >= 3 ? cordon.footprint : undefined,
+      lockedPosts: cordon.lockedPosts,
     };
   }
   if (module === "containment") return polygon.length >= 3 ? { polygon } : null;
@@ -907,6 +1148,9 @@ function marineEnvironment(form: MarineForm | null) {
 function stripEmpty(context: DeviceContext): DeviceContext {
   return {
     ways: context.ways?.length ? context.ways : undefined,
+    paths: context.paths?.length ? context.paths : undefined,
+    parks: context.parks?.length ? context.parks : undefined,
+    lights: context.lights?.length ? context.lights : undefined,
     elevation: context.elevation?.length ? context.elevation : undefined,
     environment: context.environment,
   };
@@ -930,6 +1174,9 @@ function graphicsFor(
 
   if (module === "cordon" && cordon) {
     markers.push({ id: "subject", ...cordon.subject, label: "SUBJ", tone: "subject", detail: "Subject" });
+    if (cordon.footprint.length) {
+      polygons.push({ id: "footprint", points: cordon.footprint, tone: "inner", fill: cordon.footprintClosed });
+    }
   }
   if (module === "land_sar" && land) markers.push({ id: "lkp", ...land.lkp, label: "LKP", tone: "subject", detail: "Last known point" });
   if (module === "marine_sar" && marine) markers.push({ id: "lkp", ...marine.lkp, label: "LKP", tone: "subject", detail: "Last known position" });
@@ -937,11 +1184,20 @@ function graphicsFor(
     polygons.push({ id: "area", points: polygon, tone: "area", fill: polygonClosed });
   }
 
-  const cordonOut = output as { posts?: { id: string; kind: string; label: string; position: LatLng; rationale: string }[]; innerRing?: LatLng[]; outerRing?: LatLng[] } | null;
-  if (cordonOut?.innerRing) polygons.push({ id: "inner", points: cordonOut.innerRing, tone: "inner", fill: false });
-  if (cordonOut?.outerRing) polygons.push({ id: "outer", points: cordonOut.outerRing, tone: "outer", fill: false });
+  const cordonOut = output as {
+    posts?: { id: string; kind: string; label: string; position: LatLng; rationale: string }[];
+    footprint?: LatLng[];
+    escapePolygon?: LatLng[];
+    searchTasks?: { id: string; points: LatLng[]; kind: string }[];
+  } | null;
+  if (cordonOut?.footprint?.length) polygons.push({ id: "plan-footprint", points: cordonOut.footprint, tone: "inner", fill: true });
+  if (cordonOut?.escapePolygon?.length) polygons.push({ id: "escape", points: cordonOut.escapePolygon, tone: "outer", fill: false });
+  for (const task of cordonOut?.searchTasks ?? []) {
+    if (task.points.length >= 2) lines.push({ id: task.id, points: task.points, tone: task.kind === "park" ? "search" : "tick" });
+  }
   for (const post of cordonOut?.posts ?? []) {
-    markers.push({ id: post.id, ...post.position, label: post.id, tone: post.kind, detail: post.rationale });
+    const tone = post.kind === "escape" ? "closure" : post.kind === "scene" ? "inner" : post.kind === "search" ? "search" : post.kind;
+    markers.push({ id: post.id, ...post.position, label: post.id, tone, detail: post.rationale });
   }
 
   const seal = output as { closures?: { id: string; position: LatLng; roadName: string; rationale: string }[]; exits?: { position: LatLng; roadName: string }[] } | null;

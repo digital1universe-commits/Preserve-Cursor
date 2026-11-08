@@ -61,7 +61,7 @@ export function Login() {
         <Brand />
         <h1>Containment and search, kept inside the system.</h1>
         <ol>
-          <li>Siege cordon posts, an outer ring, and a rendezvous.</li>
+          <li>Scene surround on four sides, street blocks, and foot-search tasks.</li>
           <li>The fewest road closures that seal a drawn area.</li>
           <li>A land search ring from the person, the time, and the ground.</li>
           <li>A marine datum from wind, current, and the vessel.</li>

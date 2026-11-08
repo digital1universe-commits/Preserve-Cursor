@@ -120,12 +120,13 @@ test("accounts, grants, and plans stay inside the installation", async () => {
     headers: { cookie: commanderCookie, "content-type": "application/json" },
     body: JSON.stringify({
       module: "cordon",
-      input: { subject: { lat: -36.8297, lng: 174.7964 }, structure: "commercial", exits: 3, risk: "firearm" },
+      input: { subject: { lat: -36.8297, lng: 174.7964 }, structure: "commercial", risk: "firearm" },
     }),
   });
   assert.equal(cordon.status, 201);
   const cordonBody = await cordon.json();
-  assert.ok(cordonBody.plan.output.innerRadiusM >= 100);
+  assert.ok(cordonBody.plan.output.standoffM >= 90);
+  assert.equal(cordonBody.plan.output.posts.filter((post: { kind: string }) => post.kind === "scene").length, 4);
   assert.match(JSON.stringify(cordonBody.plan.output.narrative), /does not describe an approach/i);
 
   const audit = await fetch(`${base}/api/audit`, { headers: { cookie: commanderCookie } }).then((res) => res.json());

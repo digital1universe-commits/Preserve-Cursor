@@ -1,288 +1,378 @@
+import { planContainment } from "./containment.js";
+import type { PathWay, ParkArea } from "./features.js";
 import {
   bearingDeg,
-  circlePolygon,
+  bboxOf,
   destination,
+  expandBBox,
   formatCoord,
   haversineM,
-  segmentIntersection,
+  pointInPolygon,
+  polygonAreaM2,
+  type LatLng,
 } from "./geo.js";
-import { isDriveableHighway, roadClassRank, type RoadWay } from "./roads.js";
-import type { LatLng } from "./geo.js";
+import { isDriveableHighway, type RoadWay } from "./roads.js";
 
 export type StructureKind = "detached" | "commercial" | "multi_storey" | "open_ground";
 export type SubjectRisk = "unknown" | "unarmed" | "edged" | "firearm";
 
 export type CordonPost = {
   id: string;
-  kind: "inner" | "outer" | "traffic" | "rvp" | "command";
+  kind: "scene" | "escape" | "search" | "rvp" | "command";
   position: LatLng;
   label: string;
+  side?: "north" | "east" | "south" | "west";
+  locked?: boolean;
   sectorBearing?: number;
-  sectorWidth?: number;
+  rationale: string;
+};
+
+export type SearchTask = {
+  id: string;
+  kind: "park" | "walkway" | "alley" | "easement" | "path";
+  name: string;
+  points: LatLng[];
   rationale: string;
 };
 
 export type CordonPlan = {
-  model: "preserve-cordon-v1";
-  innerRadiusM: number;
-  outerRadiusM: number;
+  model: "preserve-cordon-v2";
+  standoffM: number;
+  escapeRadiusM: number;
+  footprint: LatLng[];
+  escapePolygon: LatLng[];
   posts: CordonPost[];
-  innerRing: LatLng[];
-  outerRing: LatLng[];
+  searchTasks: SearchTask[];
+  closures: { id: string; position: LatLng; roadName: string; seals: number; rationale: string }[];
   narrative: string[];
   actions: string[];
   riskNote: string;
 };
 
-const INNER_DEFAULT: Record<StructureKind, number> = {
-  detached: 45,
-  commercial: 60,
-  multi_storey: 75,
-  open_ground: 90,
+const FOOTPRINT_HALF_M: Record<StructureKind, number> = {
+  detached: 18,
+  commercial: 32,
+  multi_storey: 28,
+  open_ground: 45,
 };
 
-const OUTER_DEFAULT: Record<SubjectRisk, number> = {
-  unarmed: 160,
-  edged: 200,
-  unknown: 250,
-  firearm: 400,
+const STANDOFF_M: Record<SubjectRisk, number> = {
+  unarmed: 18,
+  edged: 28,
+  unknown: 40,
+  firearm: 90,
 };
+
+const ESCAPE_RADIUS_M: Record<SubjectRisk, number> = {
+  unarmed: 350,
+  edged: 400,
+  unknown: 500,
+  firearm: 650,
+};
+
+const SIDES = ["north", "east", "south", "west"] as const;
 
 export function planCordon(input: {
   subject: LatLng;
   structure: StructureKind;
-  exits: number;
   risk: SubjectRisk;
-  innerRadiusM?: number;
-  outerRadiusM?: number;
+  footprint?: LatLng[];
+  escapeRadiusM?: number;
+  lockedPosts?: CordonPost[];
   ways?: RoadWay[];
+  paths?: PathWay[];
+  parks?: ParkArea[];
 }): CordonPlan {
-  const exits = Math.max(1, Math.min(12, Math.round(input.exits || 4)));
-  let inner = input.innerRadiusM ?? INNER_DEFAULT[input.structure];
-  let outer = input.outerRadiusM ?? OUTER_DEFAULT[input.risk];
-  if (input.risk === "firearm") inner = Math.max(inner, 100);
-  if (outer < inner + 40) outer = inner + 80;
-
-  const spacing = input.structure === "open_ground" ? 80 : 100;
-  const postCount = Math.max(
-    exits,
-    input.structure === "commercial" || input.structure === "multi_storey" ? 6 : 4,
-    Math.ceil((2 * Math.PI * inner) / spacing),
-  );
-  const count = Math.min(12, postCount);
+  const footprint = normaliseFootprint(input.footprint, input.subject, input.structure);
+  const standoff = STANDOFF_M[input.risk];
+  const escapeRadius = Math.max(180, Math.min(1200, input.escapeRadiusM ?? ESCAPE_RADIUS_M[input.risk]));
+  const escapePolygon = expandFootprint(footprint, escapeRadius);
   const ways = (input.ways ?? []).filter((way) => isDriveableHighway(way.highway));
-  const samples = sampleRoads(ways, 25);
+  const paths = input.paths ?? [];
+  const parks = input.parks ?? [];
+  const locked = (input.lockedPosts ?? []).filter((post) => post.locked);
 
-  const posts: CordonPost[] = [];
-  const sectorWidth = 360 / count;
-  for (let index = 0; index < count; index++) {
-    const bearing = (index * 360) / count;
-    const ideal = destination(input.subject, bearing, inner);
-    const snap = nearestSample(ideal, samples, 40);
-    const position = snap ?? ideal;
-    const facing = bearingDeg(position, input.subject);
-    posts.push({
-      id: `IC-${index + 1}`,
-      kind: "inner",
-      position,
-      label: `Inner ${index + 1}`,
-      sectorBearing: facing,
-      sectorWidth,
-      rationale: snap
-        ? `Observation post on the inner cordon, moved onto the nearest road within 40 m. Sector faces the subject at ${Math.round(facing)}°, about ${Math.round(sectorWidth)}° wide. ${formatCoord(position)}.`
-        : `Observation post plotted on the ${Math.round(inner)} m ring. No road within 40 m, so confirm a covered position on the ground. Sector faces the subject at ${Math.round(facing)}°.`,
-    });
+  const scenePosts = surroundScene(footprint, input.subject, standoff, input.risk, locked);
+  const coverage = expandBBox(bboxOf(escapePolygon), 120);
+  const seal = planContainment({ polygon: escapePolygon, ways, coverage });
+  const escapePosts = seal.closures.map((site, index) => {
+    const lockedMatch = locked.find((post) => post.kind === "escape" && post.id === site.id);
+    if (lockedMatch) return lockedMatch;
+    return {
+      id: site.id,
+      kind: "escape" as const,
+      position: site.position,
+      label: site.id,
+      locked: false,
+      rationale: `Street block on ${site.roadName}. Part of the minimum set that seals driveable escape from the local sector. ${site.rationale}`,
+    };
+  });
+  // Keep locked escape posts that the new cut did not reproduce.
+  for (const post of locked.filter((item) => item.kind === "escape")) {
+    if (!escapePosts.some((item) => item.id === post.id)) escapePosts.push(post);
   }
 
-  const outerRing = circlePolygon(input.subject, outer, 72);
-  const traffic = trafficPoints(input.subject, outer, ways);
-  if (traffic.length) {
-    traffic.forEach((point, index) => {
-      posts.push({
-        id: `TCP-${index + 1}`,
-        kind: "traffic",
-        position: point.position,
-        label: `Traffic ${index + 1}`,
-        rationale: `${point.name} crosses the outer cordon. Hold vehicle and foot traffic here. ${formatCoord(point.position)}.`,
-      });
-    });
-  } else {
-    for (let index = 0; index < 4; index++) {
-      const bearing = 45 + index * 90;
-      const position = destination(input.subject, bearing, outer);
-      posts.push({
-        id: `OC-${index + 1}`,
-        kind: "outer",
-        position,
-        label: `Outer ${index + 1}`,
-        rationale: `Outer cordon plotted on the ${Math.round(outer)} m ring because no driveable road was loaded across it. Confirm the real access roads before posting. ${formatCoord(position)}.`,
-      });
-    }
-  }
-
-  const rvp = chooseRvp(input.subject, outer, samples);
-  posts.push({
-    id: "RVP",
-    kind: "rvp",
-    position: rvp.position,
-    label: "RVP",
-    rationale: rvp.rationale,
-  });
-  const command = commandPost(input.subject, rvp.position, outer);
-  posts.push({
-    id: "CP",
-    kind: "command",
-    position: command,
-    label: "Command",
-    rationale: `Suggested command position, offset from the rendezvous so arriving vehicles do not sit on the command point. Move it to the real premises. ${formatCoord(command)}.`,
+  const searchTasks = buildSearchTasks(escapePolygon, paths, parks, ways);
+  const searchPosts = searchTasks.slice(0, 16).map((task, index) => {
+    const mid = task.points[Math.floor(task.points.length / 2)] || task.points[0];
+    const lockedMatch = locked.find((post) => post.kind === "search" && post.id === `SR-${index + 1}`);
+    if (lockedMatch) return lockedMatch;
+    return {
+      id: `SR-${index + 1}`,
+      kind: "search" as const,
+      position: mid,
+      label: `SR-${index + 1}`,
+      locked: false,
+      rationale: task.rationale,
+    };
   });
 
-  const riskNote =
-    input.risk === "firearm"
-      ? "A firearm is reported. Inner posts are a containment ring only. Occupy them from ballistic cover, and only when the commander accepts that exposure. This model does not describe an approach, a field of fire, or an entry."
-      : input.risk === "edged"
-        ? "An edged weapon is reported. Keep the inner ring back from sudden contact and do not close it without a command direction."
-        : input.risk === "unarmed"
-          ? "No weapon is reported. The ring is still a containment and observation plan, not permission to approach."
-          : "The risk is unknown, so the outer cordon is set wide. Narrow it only when the commander is satisfied about weapons.";
+  const rvpLocked = locked.find((post) => post.kind === "rvp");
+  const commandLocked = locked.find((post) => post.kind === "command");
+  const rvp = rvpLocked ?? chooseRvp(input.subject, escapePolygon, ways, escapeRadius);
+  const command =
+    commandLocked ??
+    ({
+      id: "CP",
+      kind: "command" as const,
+      position: offsetOutside(rvp.position, input.subject, 90),
+      label: "Command",
+      locked: false,
+      rationale: `Suggested command point, kept off the rendezvous so arriving units do not stack on the commander. Move it to the real premises. ${formatCoord(offsetOutside(rvp.position, input.subject, 90))}.`,
+    } satisfies CordonPost);
+
+  const posts = [...scenePosts, ...escapePosts, ...searchPosts, rvp, command];
+  const riskNote = riskCopy(input.risk);
 
   return {
-    model: "preserve-cordon-v1",
-    innerRadiusM: Math.round(inner),
-    outerRadiusM: Math.round(outer),
+    model: "preserve-cordon-v2",
+    standoffM: Math.round(standoff),
+    escapeRadiusM: Math.round(escapeRadius),
+    footprint,
+    escapePolygon,
     posts,
-    innerRing: circlePolygon(input.subject, inner, 64),
-    outerRing,
+    searchTasks,
+    closures: seal.closures.map((site) => ({
+      id: site.id,
+      position: site.position,
+      roadName: site.roadName,
+      seals: site.seals,
+      rationale: site.rationale,
+    })),
     narrative: [
-      `Inner cordon at ${Math.round(inner)} m with ${count} observation posts. Sectors overlap around the subject and face inward.`,
-      `Outer cordon at ${Math.round(outer)} m. ${
-        traffic.length
-          ? `${traffic.length} road crossing${traffic.length === 1 ? "" : "s"} should be held as traffic points.`
-          : "Road crossings could not be read, so the outer ring is plotted as four points to be confirmed."
-      }`,
-      "Posts are spaced evenly because the direction of each exit was not supplied. After a look at the building, slide a post to cover a door, gate, or alley the ring does not see.",
+      `Scene surround: observation posts on the north, east, south, and west faces at about ${Math.round(standoff)} m standoff from the footprint. This is containment and observation, not an approach or an entry.`,
+      `Local escape sector: about ${Math.round(escapeRadius)} m around the scene. ${seal.closures.length} street block${seal.closures.length === 1 ? "" : "s"} for ${seal.exits.length} driveable exit corridor${seal.exits.length === 1 ? "" : "s"} — the fewest sites that seal the loaded roads.`,
+      searchTasks.length
+        ? `${searchTasks.length} search task${searchTasks.length === 1 ? "" : "s"} for parks, walkways, alleys, and easements so a person on foot cannot leave the sector without meeting a search or a street block.`
+        : "No parks or walkways were loaded in the sector. Confirm open ground, easements, and cut-throughs on the ground.",
       riskNote,
+      locked.length ? `${locked.length} post${locked.length === 1 ? "" : "s"} locked by the commander and kept through this recompute.` : "Posts can be moved and locked so a later recompute does not wipe the ground truth.",
     ],
     actions: [
-      "Walk the inner posts against the actual doors and corners before they are occupied.",
-      "Keep the rendezvous and command point outside the outer cordon, off the direct line to the subject.",
-      "Recompute if the subject moves or the cordon is handed to another agency.",
+      "Occupy the four scene faces from cover that matches the reported risk. Do not treat the pins as an approach path onto the structure.",
+      "Place the street blocks first with the fewest units, then push search teams through parks, alleys, walkways, and easements inside the sector.",
+      "Lock any post you have already committed on the ground before you rebuild the plan.",
+      "Recompute if the subject moves, the footprint changes, or another agency takes the ground.",
     ],
     riskNote,
   };
 }
 
-function sampleRoads(ways: RoadWay[], stepM: number): { position: LatLng; name: string; highway: string }[] {
-  const samples: { position: LatLng; name: string; highway: string }[] = [];
-  for (const way of ways) {
-    for (let i = 0; i < way.points.length - 1; i++) {
-      const a = way.points[i];
-      const b = way.points[i + 1];
-      const length = haversineM(a, b);
-      const steps = Math.max(1, Math.ceil(length / stepM));
-      for (let step = 0; step <= steps; step++) {
-        const t = step / steps;
-        samples.push({
-          position: {
-            lat: a.lat + (b.lat - a.lat) * t,
-            lng: a.lng + (b.lng - a.lng) * t,
-          },
-          name: way.name || "Unnamed road",
-          highway: way.highway,
-        });
-      }
-    }
+function normaliseFootprint(footprint: LatLng[] | undefined, subject: LatLng, structure: StructureKind): LatLng[] {
+  if (footprint && footprint.length >= 3) {
+    const closed = [...footprint];
+    const first = closed[0];
+    const last = closed[closed.length - 1];
+    if (haversineM(first, last) > 1) closed.push(first);
+    if (polygonAreaM2(closed) >= 80) return closed;
   }
-  return samples;
+  const half = FOOTPRINT_HALF_M[structure];
+  const n = destination(subject, 0, half);
+  const e = destination(subject, 90, half);
+  const s = destination(subject, 180, half);
+  const w = destination(subject, 270, half);
+  return [
+    { lat: n.lat, lng: w.lng },
+    { lat: n.lat, lng: e.lng },
+    { lat: s.lat, lng: e.lng },
+    { lat: s.lat, lng: w.lng },
+  ];
 }
 
-function nearestSample(
-  point: LatLng,
-  samples: { position: LatLng; name: string; highway: string }[],
-  maxM: number,
-): LatLng | null {
-  let best: LatLng | null = null;
-  let bestDistance = maxM;
-  for (const sample of samples) {
-    const distance = haversineM(point, sample.position);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = sample.position;
+function expandFootprint(footprint: LatLng[], radiusM: number): LatLng[] {
+  const center = centroid(footprint);
+  return footprint.map((corner) => {
+    const bearing = bearingDeg(center, corner);
+    const distance = haversineM(center, corner) + radiusM;
+    return destination(center, bearing, distance);
+  });
+}
+
+function surroundScene(
+  footprint: LatLng[],
+  subject: LatLng,
+  standoffM: number,
+  risk: SubjectRisk,
+  locked: CordonPost[],
+): CordonPost[] {
+  const center = centroid(footprint);
+  return SIDES.map((side, index) => {
+    const id = `SC-${index + 1}`;
+    const lockedMatch = locked.find((post) => post.id === id || (post.kind === "scene" && post.side === side));
+    if (lockedMatch) return { ...lockedMatch, locked: true };
+    const face = facePoint(footprint, center, side);
+    const outward = bearingDeg(center, face);
+    const position = destination(face, outward, standoffM);
+    const facing = bearingDeg(position, subject);
+    return {
+      id,
+      kind: "scene",
+      position,
+      label: id,
+      side,
+      locked: false,
+      sectorBearing: facing,
+      rationale: `Scene face ${side}. Observation and containment on that side of the footprint at about ${Math.round(standoffM)} m. ${
+        risk === "firearm" ? "Occupy only from ballistic cover accepted by the commander. " : risk === "edged" ? "Keep sudden-contact distance. " : ""
+      }Sector faces the subject at ${Math.round(facing)}°. ${formatCoord(position)}.`,
+    };
+  });
+}
+
+function facePoint(footprint: LatLng[], center: LatLng, side: (typeof SIDES)[number]): LatLng {
+  const targetBearing = side === "north" ? 0 : side === "east" ? 90 : side === "south" ? 180 : 270;
+  let best = footprint[0];
+  let bestDelta = 180;
+  for (const corner of footprint) {
+    const bearing = bearingDeg(center, corner);
+    let delta = Math.abs(bearing - targetBearing);
+    if (delta > 180) delta = 360 - delta;
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = corner;
     }
+  }
+  // Midpoint of the two footprint vertices nearest this compass face.
+  const ranked = [...footprint].sort((a, b) => {
+    const da = angleDelta(bearingDeg(center, a), targetBearing);
+    const db = angleDelta(bearingDeg(center, b), targetBearing);
+    return da - db;
+  });
+  if (ranked.length >= 2 && angleDelta(bearingDeg(center, ranked[1]), targetBearing) < 70) {
+    return {
+      lat: (ranked[0].lat + ranked[1].lat) / 2,
+      lng: (ranked[0].lng + ranked[1].lng) / 2,
+    };
   }
   return best;
 }
 
-function trafficPoints(
-  subject: LatLng,
-  radiusM: number,
-  ways: RoadWay[],
-): { position: LatLng; name: string; highway: string }[] {
-  const ring = circlePolygon(subject, radiusM, 72);
-  const hits: { position: LatLng; name: string; highway: string }[] = [];
-  for (const way of ways) {
-    for (let i = 0; i < way.points.length - 1; i++) {
-      const a = way.points[i];
-      const b = way.points[i + 1];
-      if (haversineM(a, subject) > radiusM + 400 && haversineM(b, subject) > radiusM + 400) continue;
-      for (let e = 0; e < ring.length; e++) {
-        const hit = segmentIntersection(a, b, ring[e], ring[(e + 1) % ring.length]);
-        if (!hit) continue;
-        hits.push({
-          position: hit,
-          name: way.name || "Unnamed road",
-          highway: way.highway,
-        });
-      }
-    }
-  }
-  const kept: { position: LatLng; name: string; highway: string }[] = [];
-  for (const hit of hits) {
-    const near = kept.find(
-      (item) =>
-        haversineM(item.position, hit.position) < 55 &&
-        (item.name === hit.name || haversineM(item.position, hit.position) < 25),
-    );
-    if (!near) kept.push(hit);
-  }
-  kept.sort((a, b) => roadClassRank(b.highway) - roadClassRank(a.highway));
-  return kept.slice(0, 14);
+function angleDelta(a: number, b: number): number {
+  let delta = Math.abs(a - b);
+  if (delta > 180) delta = 360 - delta;
+  return delta;
 }
 
-function chooseRvp(
-  subject: LatLng,
-  outer: number,
-  samples: { position: LatLng; name: string; highway: string }[],
-): { position: LatLng; rationale: string } {
-  let best: { position: LatLng; name: string; highway: string; score: number } | null = null;
-  for (const sample of samples) {
-    const distance = haversineM(subject, sample.position);
-    if (distance < outer * 1.08 || distance > outer * 1.75) continue;
-    const score = roadClassRank(sample.highway) * 1000 - Math.abs(distance - outer * 1.3);
-    if (!best || score > best.score) best = { ...sample, score };
+function buildSearchTasks(escapePolygon: LatLng[], paths: PathWay[], parks: ParkArea[], ways: RoadWay[]): SearchTask[] {
+  const tasks: SearchTask[] = [];
+  for (const park of parks) {
+    if (!park.points.some((point) => pointInPolygon(point, escapePolygon))) continue;
+    tasks.push({
+      id: `park-${park.id}`,
+      kind: "park",
+      name: park.name,
+      points: park.points,
+      rationale: `Search ${park.name}. Open ground inside the escape sector — a person on foot can cut through here without using a sealed street.`,
+    });
+  }
+  for (const path of paths) {
+    const inside = path.points.filter((point) => pointInPolygon(point, escapePolygon));
+    if (inside.length < 2) continue;
+    const kind =
+      path.kind === "alley" ? "alley" : path.kind === "footway" || path.kind === "pedestrian" ? "walkway" : path.kind === "path" ? "path" : "easement";
+    tasks.push({
+      id: `path-${path.id}`,
+      kind,
+      name: path.name,
+      points: inside,
+      rationale: `Search ${path.name} (${kind}). Keep it under observation so the subject cannot leave the sector on foot without walking into police.`,
+    });
+  }
+  // Service alleys sometimes arrive only as driveable service ways.
+  for (const way of ways) {
+    if (way.highway !== "service") continue;
+    const inside = way.points.filter((point) => pointInPolygon(point, escapePolygon));
+    if (inside.length < 2) continue;
+    if (tasks.some((task) => task.name === way.name && task.kind === "alley")) continue;
+    tasks.push({
+      id: `alley-${way.id}`,
+      kind: "alley",
+      name: way.name,
+      points: inside,
+      rationale: `Search ${way.name} (service / alley). Confirm it is walked or held so it is not a quiet foot exit.`,
+    });
+  }
+  return tasks.slice(0, 40);
+}
+
+function chooseRvp(subject: LatLng, escapePolygon: LatLng[], ways: RoadWay[], escapeRadius: number): CordonPost {
+  const center = centroid(escapePolygon);
+  let best: { position: LatLng; name: string; score: number } | null = null;
+  for (const way of ways) {
+    for (const point of way.points) {
+      if (pointInPolygon(point, escapePolygon)) continue;
+      const distance = haversineM(center, point);
+      if (distance < escapeRadius * 1.05 || distance > escapeRadius * 1.8) continue;
+      const score = distance;
+      if (!best || score < best.score) best = { position: point, name: way.name, score };
+    }
   }
   if (best) {
     return {
+      id: "RVP",
+      kind: "rvp",
       position: best.position,
-      rationale: `Rendezvous on ${best.name}, outside the outer cordon and on the highest class of road in that band. Confirm it is not on the direct approach the subject can see. ${formatCoord(best.position)}.`,
+      label: "RVP",
+      locked: false,
+      rationale: `Rendezvous on ${best.name}, outside the escape sector. Confirm it is not in the subject's direct view. ${formatCoord(best.position)}.`,
     };
   }
-  const position = destination(subject, 200, outer * 1.35);
+  const position = destination(subject, 200, escapeRadius * 1.35);
   return {
+    id: "RVP",
+    kind: "rvp",
     position,
-    rationale: `No suitable road was loaded outside the outer cordon. The rendezvous is plotted ${Math.round(outer * 1.35)} m from the subject and must be moved onto a real approach. ${formatCoord(position)}.`,
+    label: "RVP",
+    locked: false,
+    rationale: `No road was loaded outside the sector. The rendezvous is plotted for confirmation on a real approach. ${formatCoord(position)}.`,
   };
 }
 
-function commandPost(subject: LatLng, rvp: LatLng, outer: number): LatLng {
-  const bearing = bearingDeg(subject, rvp);
-  let command = destination(rvp, bearing + 80, 85);
-  if (haversineM(subject, command) < outer * 1.02) {
-    command = destination(rvp, bearing, 110);
-  }
-  return command;
+function offsetOutside(from: LatLng, subject: LatLng, metres: number): LatLng {
+  const bearing = bearingDeg(subject, from);
+  return destination(from, bearing + 75, metres);
 }
 
+function centroid(points: LatLng[]): LatLng {
+  const lat = points.reduce((sum, point) => sum + point.lat, 0) / points.length;
+  const lng = points.reduce((sum, point) => sum + point.lng, 0) / points.length;
+  return { lat, lng };
+}
+
+function riskCopy(risk: SubjectRisk): string {
+  if (risk === "firearm") {
+    return "A firearm is reported. Scene faces are a containment ring only. Occupy them from ballistic cover, and only when the commander accepts that exposure. This model does not describe an approach onto the structure, a field of fire, or an entry.";
+  }
+  if (risk === "edged") {
+    return "An edged weapon is reported. Keep the scene faces back from sudden contact. Street blocks and foot searches still apply.";
+  }
+  if (risk === "unarmed") {
+    return "No weapon is reported. The plan is still containment, street blocks, and foot-search tasks — not permission to approach the subject.";
+  }
+  return "The risk is unknown, so standoff and the escape sector are set wide. Narrow them only when the commander is satisfied about weapons and how far the subject may already have walked.";
+}
+
+/** @deprecated kept for map ticks that face the subject */
 export function sectorTick(post: CordonPost, subject: LatLng): LatLng[] | null {
   if (post.sectorBearing == null) return null;
   const toward = bearingDeg(post.position, subject);

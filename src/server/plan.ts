@@ -1,5 +1,6 @@
 import { planCordon } from "../engine/cordon.js";
 import { planContainment } from "../engine/containment.js";
+import type { PathWay, ParkArea, StreetLight } from "../engine/features.js";
 import { bboxOf, expandBBox, haversineM, type BBox } from "../engine/geo.js";
 import { planLandSearch, type ElevationSample, type LandInput } from "../engine/land.js";
 import { planMarineSearch, type MarineEnvironment } from "../engine/marine.js";
@@ -16,11 +17,14 @@ import {
 } from "../engine/validate.js";
 import type { ModuleName } from "./rbac.js";
 import { fetchElevation, fetchMarineConditions } from "./environment.js";
-import { fetchHighways } from "./osm.js";
+import { fetchHighways, fetchOsmBundle } from "./osm.js";
 import type { AppContext } from "./db.js";
 
 export type PlanContext = {
   ways?: RoadWay[];
+  paths?: PathWay[];
+  parks?: ParkArea[];
+  lights?: StreetLight[];
   elevation?: ElevationSample[];
   environment?: MarineEnvironment;
   coverage?: BBox;
@@ -41,15 +45,33 @@ export async function executePlan(
 
 async function runCordon(app: AppContext, input: unknown, suppliedWays: unknown) {
   const parsed = validateCordonInput(input);
-  const outer = parsed.outerRadiusM ?? (parsed.risk === "firearm" ? 400 : 250);
-  const coverage = expandBBox(bboxOf([parsed.subject]), outer + 500);
-  const loaded = await loadWays(app, coverage, suppliedWays);
-  const output = planCordon({ ...parsed, ways: loaded.ways });
+  const radius = parsed.escapeRadiusM ?? (parsed.risk === "firearm" ? 650 : 500);
+  const coverage = expandBBox(bboxOf(parsed.footprint?.length ? parsed.footprint : [parsed.subject]), radius + 220);
+  assertBox(coverage);
+  const loaded = await loadBundle(app, coverage, suppliedWays);
+  const output = planCordon({
+    ...parsed,
+    ways: loaded.ways,
+    paths: loaded.paths,
+    parks: loaded.parks,
+  });
   return {
     input: parsed,
     output,
-    context: { ways: loaded.ways, coverage },
-    meta: { roadSource: loaded.source, roadCount: loaded.ways.length },
+    context: {
+      ways: loaded.ways,
+      paths: loaded.paths,
+      parks: loaded.parks,
+      lights: loaded.lights,
+      coverage,
+    },
+    meta: {
+      roadSource: loaded.source,
+      roadCount: loaded.ways.length,
+      pathCount: loaded.paths.length,
+      parkCount: loaded.parks.length,
+      lightCount: loaded.lights.length,
+    },
   };
 }
 
@@ -151,18 +173,54 @@ async function loadWays(
   coverage: BBox,
   supplied: unknown,
 ): Promise<{ ways: RoadWay[]; source: "live" | "cache" | "device" | "none" }> {
-  const key = `roads:${coverage.south.toFixed(3)}:${coverage.west.toFixed(3)}:${coverage.north.toFixed(3)}:${coverage.east.toFixed(3)}`;
+  const bundle = await loadBundle(app, coverage, supplied);
+  return { ways: bundle.ways, source: bundle.source };
+}
+
+async function loadBundle(
+  app: AppContext,
+  coverage: BBox,
+  supplied: unknown,
+): Promise<{
+  ways: RoadWay[];
+  paths: PathWay[];
+  parks: ParkArea[];
+  lights: StreetLight[];
+  source: "live" | "cache" | "device" | "none";
+}> {
+  const key = `osm:${coverage.south.toFixed(3)}:${coverage.west.toFixed(3)}:${coverage.north.toFixed(3)}:${coverage.east.toFixed(3)}`;
   try {
-    const ways = thinWays(await fetchHighways(coverage));
-    writeCache(app, key, "roads", JSON.stringify(ways));
-    return { ways, source: "live" };
+    const bundle = await fetchOsmBundle(coverage);
+    const ways = thinWays(bundle.ways);
+    const packed = { ways, paths: bundle.paths, parks: bundle.parks, lights: bundle.lights };
+    writeCache(app, key, "osm", JSON.stringify(packed));
+    writeCache(
+      app,
+      `roads:${coverage.south.toFixed(3)}:${coverage.west.toFixed(3)}:${coverage.north.toFixed(3)}:${coverage.east.toFixed(3)}`,
+      "roads",
+      JSON.stringify(ways),
+    );
+    return { ...packed, source: "live" };
   } catch (error) {
     if (error instanceof InputError) throw error;
     const cached = readCache(app, key);
-    if (cached) return { ways: thinWays(JSON.parse(cached) as RoadWay[]), source: "cache" };
-    const ways = safeWays(supplied);
-    if (ways.length) return { ways, source: "device" };
-    return { ways: [], source: "none" };
+    if (cached) {
+      const packed = JSON.parse(cached) as {
+        ways: RoadWay[];
+        paths: PathWay[];
+        parks: ParkArea[];
+        lights: StreetLight[];
+      };
+      return { ...packed, ways: thinWays(packed.ways), source: "cache" };
+    }
+    try {
+      const ways = thinWays(await fetchHighways(coverage));
+      return { ways, paths: [], parks: [], lights: [], source: "live" };
+    } catch {
+      const ways = safeWays(supplied);
+      if (ways.length) return { ways, paths: [], parks: [], lights: [], source: "device" };
+      return { ways: [], paths: [], parks: [], lights: [], source: "none" };
+    }
   }
 }
 

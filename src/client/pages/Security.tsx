@@ -76,7 +76,7 @@ export function Security() {
         </ul>
       )}
       <h2>What the models will not do</h2>
-      <p>They do not describe an approach, a field of fire, or how to deploy a closure. A firearm report only pushes the cordon back and says to use cover. The commander remains responsible for every post and every search asset.</p>
+      <p>The cordon model surrounds the scene, seals the fewest streets that stop escape, and lists parks and walkways to search. It does not describe an approach onto the subject, a field of fire, or how to deploy a closure. 3D terrain is for the commander to judge height and vantage. A firearm report increases standoff and says to use cover. The commander remains responsible for every post and every search asset.</p>
     </div>
   );
 }

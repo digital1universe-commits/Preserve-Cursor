@@ -1,10 +1,24 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
 import { canAdmin, canAudit } from "./format";
+import { startPresenceTracking } from "./presence";
 
 export function Shell() {
   const auth = useAuth();
   const user = auth.user!;
+  const location = useLocation();
+  const incidentRef = useRef<string | null>(null);
+  const match = location.pathname.match(/^\/incidents\/([^/]+)/);
+  incidentRef.current = match?.[1] ?? null;
+
+  useEffect(() => {
+    if (!auth.online) return;
+    return startPresenceTracking({
+      getIncidentId: () => incidentRef.current,
+    });
+  }, [auth.online, user.id]);
+
   return (
     <div className="app">
       <aside className="sidenav">

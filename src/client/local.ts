@@ -1,5 +1,6 @@
-import { planCordon } from "../engine/cordon.js";
+import { planCordon, type CordonPost } from "../engine/cordon.js";
 import { planContainment } from "../engine/containment.js";
+import type { PathWay, ParkArea, StreetLight } from "../engine/features.js";
 import { planLandSearch, type LandInput } from "../engine/land.js";
 import { planMarineSearch, type MarineEnvironment, type MarineInput } from "../engine/marine.js";
 import type { RoadWay } from "../engine/roads.js";
@@ -7,6 +8,9 @@ import type { LatLng } from "../engine/geo.js";
 
 export type DeviceContext = {
   ways?: RoadWay[];
+  paths?: PathWay[];
+  parks?: ParkArea[];
+  lights?: StreetLight[];
   elevation?: LandInput["elevation"];
   environment?: MarineEnvironment;
 };
@@ -16,11 +20,13 @@ export function runOnDevice(module: string, input: Record<string, unknown>, cont
     return planCordon({
       subject: input.subject as LatLng,
       structure: input.structure as "detached",
-      exits: Number(input.exits),
       risk: input.risk as "unknown",
-      innerRadiusM: input.innerRadiusM ? Number(input.innerRadiusM) : undefined,
-      outerRadiusM: input.outerRadiusM ? Number(input.outerRadiusM) : undefined,
+      footprint: input.footprint as LatLng[] | undefined,
+      escapeRadiusM: input.escapeRadiusM ? Number(input.escapeRadiusM) : undefined,
+      lockedPosts: input.lockedPosts as CordonPost[] | undefined,
       ways: context.ways,
+      paths: context.paths,
+      parks: context.parks,
     });
   }
   if (module === "containment") {

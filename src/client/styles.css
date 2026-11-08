@@ -291,6 +291,10 @@ details summary { cursor: pointer; color: var(--muted); }
 .pin-closure, .pin-inner { border-color: var(--amber); color: var(--amber); }
 .pin-datum, .pin-water { background: var(--water); color: #102026; border: 0; }
 .pin-rvp, .pin-command { border-color: var(--green); color: var(--green); }
+.pin-presence { border-color: var(--water); color: var(--water); }
+.pin-light { min-width: 1.1rem; background: #efe8d8; color: #24180c; border-color: #efe8d8; }
+.map-3d { min-height: 280px; }
+.map-toolbar-actions { flex-wrap: wrap; justify-content: flex-end; }
 
 .panel {
   border-left: 1px solid var(--line);
