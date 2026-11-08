@@ -5,29 +5,22 @@ import { useAuth } from "../auth";
 import { Brand } from "../shell";
 import { kvSet } from "../offline";
 
-type Account = { email: string; displayName: string; appointment: string; role: string; agency: string };
-
 export function Login() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("commander@hmp.preserve.test");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [banner, setBanner] = useState<{ password: string; accounts: Account[] } | null>(null);
+  const [hasUsers, setHasUsers] = useState(true);
 
   useEffect(() => {
     if (auth.user) navigate("/", { replace: true });
   }, [auth.user, navigate]);
 
   useEffect(() => {
-    api<{ demoBanner: boolean; password?: string; accounts?: Account[] }>("/api/auth/bootstrap")
-      .then((data) => {
-        if (data.demoBanner && data.password && data.accounts) {
-          setBanner({ password: data.password, accounts: data.accounts });
-          setPassword(data.password);
-        }
-      })
+    api<{ hasUsers?: boolean }>("/api/auth/bootstrap")
+      .then((data) => setHasUsers(data.hasUsers !== false))
       .catch(() => setError("The installation cannot be reached from this device. A session has to be opened once while the link is up."));
   }, []);
 
@@ -49,11 +42,6 @@ export function Login() {
       setBusy(false);
     }
   }
-
-  const featuredOrder = ["commander@hmp.preserve.test", "search@crc.preserve.test", "field@hmp.preserve.test"];
-  const featured = banner
-    ? featuredOrder.flatMap((email) => banner.accounts.filter((account) => account.email === email))
-    : undefined;
 
   return (
     <div className="login">
@@ -88,39 +76,15 @@ export function Login() {
             />
           </label>
           {error && <p className="form-error">{error}</p>}
-          <button type="submit" className="primary" disabled={busy}>
+          {!hasUsers && (
+            <p className="hint">
+              This installation has no accounts yet. An operator must supply PRESERVE_EVAL_PASSWORD and restart to seed evaluation accounts, or create accounts through an existing admin path.
+            </p>
+          )}
+          <button type="submit" className="primary" disabled={busy || !hasUsers}>
             {busy ? "Checking" : "Enter"}
           </button>
         </form>
-        {banner && featured && (
-          <div className="eval">
-            <p className="eyebrow">Evaluation access</p>
-            <p>These accounts ship with this build so it can be reviewed. Remove them before any operational use.</p>
-            <ul>
-              {featured.map((account) => (
-                <li key={account.email}>
-                  <button type="button" onClick={() => setEmail(account.email)}>
-                    <strong>{account.displayName}</strong>
-                    <span>{account.email}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <p>
-              Password <code>{banner.password}</code>
-            </p>
-            <details>
-              <summary>All evaluation accounts</summary>
-              <ul>
-                {banner.accounts.map((account) => (
-                  <li key={account.email}>
-                    {account.agency} · {account.appointment} · {account.email}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          </div>
-        )}
       </section>
     </div>
   );

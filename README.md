@@ -39,7 +39,9 @@ The master key is created in `data/master.key` on first start. Keep that file wi
 
 ## Evaluation access
 
-The evaluation password is `Harbour-Watch-1948`.
+Evaluation accounts are **not** seeded from a password in the source tree. Set `PRESERVE_EVAL_PASSWORD` in the installation environment (never commit it), then start the desk on an empty data directory. That password is hashed into the seeded accounts. The unauthenticated bootstrap endpoint never returns passwords or account lists.
+
+Seeded evaluation emails (password = whatever you set in `PRESERVE_EVAL_PASSWORD`):
 
 | Email | Role |
 | --- | --- |
@@ -51,4 +53,4 @@ The evaluation password is `Harbour-Watch-1948`.
 | watch@crc.preserve.test | Agency admin, Coastal Rescue Coordination |
 | registrar@preserve.test | Superadmin, Joint Operations Registry |
 
-Three training incidents are seeded around Devonport: a warehouse cordon, an overdue walker, and an overdue cabin cruiser. Changing a password clears the evaluation flag on that account. Set `PRESERVE_ENV=production` and leave `PRESERVE_DEMO_BANNER` unset to hide the evaluation strip.
+Training incidents around Devonport are seeded with those accounts: warehouse cordon, overdue walker, overdue cabin cruiser, and harbour protest march. Changing a password clears the evaluation flag on that account. Set `PRESERVE_DEMO_BANNER=1` only if you intentionally want the evaluation strip after sign-in.

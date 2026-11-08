@@ -24,8 +24,6 @@ export type AppContext = {
   dataDir: string;
 };
 
-const EVAL_PASSWORD = "Harbour-Watch-1948";
-
 export function openContext(dataDir = process.env.PRESERVE_DATA_DIR || path.join(process.cwd(), "data")): AppContext {
   fs.mkdirSync(dataDir, { recursive: true });
   const key = loadMasterKey(dataDir);
@@ -170,8 +168,13 @@ function ensureColumn(db: DatabaseSync, table: string, column: string, definitio
 function seed(db: DatabaseSync, key: Buffer) {
   const count = db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
   if (count.n > 0) return;
+  const evalPassword = process.env.PRESERVE_EVAL_PASSWORD?.trim();
+  if (!evalPassword) {
+    // No evaluation seed without an operator-supplied password. The installation stays empty until accounts are created.
+    return;
+  }
   const now = new Date().toISOString();
-  const password = hashPassword(EVAL_PASSWORD);
+  const password = hashPassword(evalPassword);
   const agencies = [
     ["jor", "Joint Operations Registry", "JOR", "registry", -36.83, 174.798],
     ["hmp", "Harbour Metro Police", "HMP", "police", -36.83, 174.798],
@@ -357,8 +360,10 @@ function ensureOperationalExtras(db: DatabaseSync, key: Buffer) {
   patch.run("CRC-S1", "crc-marine", "search");
   patch.run("CRC-W1", "crc-marine", "watch");
   patch.run("JOR-1", null, "registrar");
+  const agency = db.prepare("SELECT id FROM agencies WHERE id = 'hmp'").get() as { id: string } | undefined;
   const order = db.prepare("SELECT id FROM incidents WHERE id = 'inc-order'").get() as { id: string } | undefined;
-  if (!order) {
+  const commander = db.prepare("SELECT id FROM users WHERE id = 'commander'").get() as { id: string } | undefined;
+  if (agency && commander && !order) {
     insertIncident(db, key, {
       id: "inc-order",
       agencyId: "hmp",

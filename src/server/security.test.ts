@@ -28,10 +28,10 @@ test("records round-trip through AES-GCM and passwords do not compare early", ()
   const sealed = encryptJson(key, { title: "Exercise subject" });
   assert.equal(sealed.includes("Exercise"), false);
   assert.deepEqual(decryptJson(key, sealed), { title: "Exercise subject" });
-  const hash = hashPassword("Harbour-Watch-1948");
-  assert.equal(hash.includes("Harbour"), false);
-  assert.equal(verifyPassword("Harbour-Watch-1948", hash), true);
-  assert.equal(verifyPassword("Harbour-Watch-1949", hash), false);
+  const hash = hashPassword("test-password-alpha");
+  assert.equal(hash.includes("alpha"), false);
+  assert.equal(verifyPassword("test-password-alpha", hash), true);
+  assert.equal(verifyPassword("test-password-beta", hash), false);
 });
 
 test("field officers see assigned incidents only and cannot plan", () => {
@@ -52,12 +52,14 @@ test("field officers see assigned incidents only and cannot plan", () => {
 
 test("accounts, grants, and plans stay inside the installation", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preserve-"));
+  const evalPassword = "test-eval-password-only";
   process.env.PRESERVE_DATA_DIR = dir;
   process.env.PRESERVE_MASTER_KEY = Buffer.alloc(32, 4).toString("base64");
   process.env.PRESERVE_SCRYPT_N = "1024";
-  process.env.PRESERVE_DEMO_BANNER = "1";
+  process.env.PRESERVE_DEMO_BANNER = "0";
   process.env.PRESERVE_ENV = "test";
   process.env.PRESERVE_BLOCK_EGRESS = "1";
+  process.env.PRESERVE_EVAL_PASSWORD = evalPassword;
   const { createServer } = await import("./http.js");
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -66,10 +68,12 @@ test("accounts, grants, and plans stay inside the installation", async () => {
   const base = `http://127.0.0.1:${address.port}`;
 
   const bootstrap = await fetch(`${base}/api/auth/bootstrap`).then((res) => res.json());
-  assert.equal(bootstrap.demoBanner, true);
-  assert.equal(bootstrap.password, "Harbour-Watch-1948");
+  assert.equal(bootstrap.demoBanner, false);
+  assert.equal(bootstrap.password, undefined);
+  assert.equal(bootstrap.accounts, undefined);
+  assert.equal(bootstrap.hasUsers, true);
 
-  const fieldCookie = await signIn(base, "field@hmp.preserve.test");
+  const fieldCookie = await signIn(base, "field@hmp.preserve.test", evalPassword);
   const fieldList = await fetch(`${base}/api/incidents`, { headers: { cookie: fieldCookie } }).then((res) => res.json());
   assert.deepEqual(
     fieldList.incidents.map((item: { id: string }) => item.id).sort(),
@@ -137,17 +141,17 @@ test("accounts, grants, and plans stay inside the installation", async () => {
   const rawWal = fs.existsSync(walPath) ? fs.readFileSync(walPath) : Buffer.alloc(0);
   const combined = Buffer.concat([raw, rawWal]).toString("utf8");
   assert.equal(combined.includes("overdue walker"), false);
-  assert.equal(combined.includes("Harbour-Watch-1948"), false);
+  assert.equal(combined.includes(evalPassword), false);
   assert.equal(combined.includes("cabin cruiser"), false);
 
   server.close();
 });
 
-async function signIn(base: string, email: string) {
+async function signIn(base: string, email: string, password = process.env.PRESERVE_EVAL_PASSWORD || "") {
   const response = await fetch(`${base}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: "Harbour-Watch-1948" }),
+    body: JSON.stringify({ email, password }),
   });
   assert.equal(response.status, 200);
   const cookie = response.headers.get("set-cookie");

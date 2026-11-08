@@ -129,9 +129,10 @@ export function OperationMap(props: Props) {
     const bounds = L.latLngBounds([]);
     for (const marker of props.markers) {
       const width = Math.max(26, marker.label.length * 6.4 + 8);
+      const tone = safeClass(marker.tone);
       const icon = L.divIcon({
         className: "pin",
-        html: `<span class="pin-face pin-${marker.tone}">${marker.label}</span>`,
+        html: `<span class="pin-face pin-${tone}">${escapeHtml(marker.label)}</span>`,
         iconSize: [width, 16],
         iconAnchor: [width / 2, 8],
       });
@@ -165,6 +166,19 @@ function toneColor(tone: string) {
   if (tone === "command") return "#7eb6d6";
   if (tone === "hot") return "#e06b5c";
   return "#f3f6fb";
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function safeClass(value: string) {
+  return value.replace(/[^a-z0-9_-]/gi, "") || "pin";
 }
 
 function heatLayer(cells: { lat: number; lng: number; w: number }[]) {

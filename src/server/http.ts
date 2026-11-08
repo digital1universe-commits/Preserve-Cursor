@@ -23,7 +23,6 @@ import {
   type Role,
 } from "./rbac.js";
 
-const EVALUATION_PASSWORD = "Harbour-Watch-1948";
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const KINDS = new Set<IncidentKind>(["cordon", "containment", "land_sar", "marine_sar", "public_order"]);
 const CLASSIFICATIONS = new Set(["training", "official", "sensitive", "restricted"]);
@@ -159,28 +158,12 @@ function health(_ctx: RequestContext) {
 }
 
 function bootstrap(ctx: RequestContext) {
-  const enabled = demoBannerEnabled() && evaluationActive(ctx.app);
-  if (!enabled) {
-    send(ctx.res, 200, { demoBanner: false });
-    return;
-  }
-  const rows = ctx.app.db
-    .prepare(
-      `SELECT u.email, u.display_name, u.appointment, u.role, a.short_name
-       FROM users u JOIN agencies a ON a.id = u.agency_id
-       WHERE u.evaluation = 1 AND u.active = 1 ORDER BY a.short_name, u.display_name`,
-    )
-    .all() as { email: string; display_name: string; appointment: string; role: string; short_name: string }[];
+  const users = ctx.app.db.prepare("SELECT COUNT(*) AS n FROM users WHERE active = 1").get() as { n: number };
+  // Unauthenticated bootstrap never returns passwords, emails, or roles.
   send(ctx.res, 200, {
-    demoBanner: true,
-    password: EVALUATION_PASSWORD,
-    accounts: rows.map((row) => ({
-      email: row.email,
-      displayName: row.display_name,
-      appointment: row.appointment,
-      role: row.role,
-      agency: row.short_name,
-    })),
+    demoBanner: false,
+    hasUsers: users.n > 0,
+    evaluationReady: evaluationActive(ctx.app),
   });
 }
 
@@ -1042,12 +1025,6 @@ function dutyForRole(role: string) {
 function evaluationActive(app: AppContext) {
   const row = app.db.prepare("SELECT COUNT(*) AS n FROM users WHERE evaluation = 1 AND active = 1").get() as { n: number };
   return row.n > 0;
-}
-
-function demoBannerEnabled() {
-  if (process.env.PRESERVE_DEMO_BANNER === "0") return false;
-  if (process.env.PRESERVE_DEMO_BANNER === "1") return true;
-  return process.env.PRESERVE_ENV !== "production";
 }
 
 function tileUrl() {
