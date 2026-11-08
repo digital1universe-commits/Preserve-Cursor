@@ -1,1 +1,50 @@
-# Preserve-Cursor
+# PRESERVE
+
+On-premises planning desk for containment and search. It runs in the browser on a computer or a phone, including with the link down. Case text stays on the installation. The planning models are deterministic code in this repository. They do not call an external model, and they do not describe an approach, a field of fire, or how to build a tyre-deflation device.
+
+This build ships evaluation accounts so the desk can be reviewed. Remove them before any operational use. It is a planning aid. The commander remains responsible for the decision.
+
+## What it plans
+
+- **Siege cordon.** Inner and outer rings, observation posts, traffic points, a rendezvous, and a command point. Posts are containment and observation. A reported firearm risk only increases standoff.
+- **Area seal.** Draw the area. The desk loads the surrounding driveable roads and places the fewest closure sites that leave no driveable path out to the open network. Footpaths are not sealed. One-way restrictions are ignored. A vehicle can still be on a street inside the closures.
+- **Land search.** Last known point, age, mental state, knowledge of the area, mobility, terrain, and time missing. The ring is an original behavioural estimate: people move toward the easier ground, and the search area grows with time and then fatigues. It is not a copy of a published lost-person distance table.
+- **Marine search.** Last known position, time adrift, and vessel type. On the link, the desk requests only the coordinates from the weather and marine services, then places a datum from wind leeway and current. The leeway fractions are original to this desk.
+
+## Security model
+
+- Accounts, agencies, incident membership, and cross-agency grants. A field officer sees only incidents they are on, and cannot run a plan. A missing incident and a forbidden incident both answer 404.
+- Incident titles, summaries, locations, and plan payloads are encrypted at rest. Session tokens are stored as a hash. Passwords are scrypt hashes.
+- The audit log records the action, not the case narrative.
+- The server may call only the OpenStreetMap map API and the Open-Meteo forecast, elevation, and marine APIs. The query carries coordinates and a fixed parameter list. Set `PRESERVE_BLOCK_EGRESS=1` to refuse those calls.
+- The client will not request a URL that does not start with `/api/`. Map tiles can be switched off (“Grid only”) so the tile host does not learn the area being viewed.
+- Plans made on device are queued in the browser and sync into the incident record when the link returns.
+
+## Run
+
+Node 22 or newer.
+
+```bash
+npm install
+npm run dev
+```
+
+The desk is at `http://127.0.0.1:5173`. The API listens on port 8787. `npm test` runs the planning and security tests. `npm run build` then `npm start` serves the built desk.
+
+The master key is created in `data/master.key` on first start. Keep that file with the database. Both stay out of git.
+
+## Evaluation access
+
+The evaluation password is `Harbour-Watch-1948`.
+
+| Email | Role |
+| --- | --- |
+| commander@hmp.preserve.test | Incident commander, Harbour Metro Police |
+| planner@hmp.preserve.test | Planner |
+| field@hmp.preserve.test | Field officer |
+| controller@hmp.preserve.test | Agency admin |
+| search@crc.preserve.test | Search coordinator, Coastal Rescue Coordination |
+| watch@crc.preserve.test | Agency admin, Coastal Rescue Coordination |
+| registrar@preserve.test | Superadmin, Joint Operations Registry |
+
+Three training incidents are seeded around Devonport: a warehouse cordon, an overdue walker, and an overdue cabin cruiser. Changing a password clears the evaluation flag on that account. Set `PRESERVE_ENV=production` and leave `PRESERVE_DEMO_BANNER` unset to hide the evaluation strip.
