@@ -20,7 +20,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(0, "The installation cannot be reached from this device.");
   }
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: { error?: string } | null = null;
+  if (text) {
+    try {
+      data = JSON.parse(text) as { error?: string };
+    } catch {
+      throw new ApiError(response.status || 0, "The installation did not return a usable reply.");
+    }
+  }
   if (!response.ok) throw new ApiError(response.status, data?.error || "The request was refused.");
   return data as T;
 }

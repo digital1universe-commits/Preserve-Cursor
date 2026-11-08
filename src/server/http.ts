@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { InputError } from "../engine/validate.js";
 import { hashPassword, newToken, sha256, verifyPassword } from "./crypto.js";
@@ -47,9 +48,16 @@ type AuthUser = {
   showName: boolean;
 };
 
+type Reply = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+  headersSent: boolean;
+};
+
 type RequestContext = {
-  req: http.IncomingMessage;
-  res: http.ServerResponse;
+  cookieHeader: string;
+  reply: Reply;
   url: URL;
   params: Record<string, string>;
   body: unknown;
@@ -62,17 +70,70 @@ type Handler = (ctx: RequestContext) => Promise<void> | void;
 
 const attempts = new Map<string, { count: number; reset: number }>();
 let dummyHash = "";
+let sharedApp: AppContext | null = null;
+
+function resolveDataDir() {
+  if (process.env.PRESERVE_DATA_DIR) return process.env.PRESERVE_DATA_DIR;
+  if (process.env.CURSOR_APP_ID || process.env.VERCEL) return path.join(os.tmpdir(), "preserve-data");
+  return path.join(process.cwd(), "data");
+}
+
+function getApp() {
+  if (!sharedApp) sharedApp = openContext(resolveDataDir());
+  if (!dummyHash) dummyHash = hashPassword("preserve-timing-padding-account");
+  return sharedApp;
+}
+
+function emptyReply(): Reply {
+  return { status: 500, headers: {}, body: "", headersSent: false };
+}
 
 export function createServer() {
-  const app = openContext();
+  // Local desk and tests always open a fresh installation for the configured data directory.
+  sharedApp = openContext(resolveDataDir());
   if (!dummyHash) dummyHash = hashPassword("preserve-timing-padding-account");
+  const app = sharedApp;
   const server = http.createServer((req, res) => {
-    void handle(req, res, app);
+    void handleNode(req, res, app);
   });
   return server;
 }
 
-async function handle(req: http.IncomingMessage, res: http.ServerResponse, app: AppContext) {
+/** Web Request entry used by the published host (Next.js route handlers). */
+export async function handleApiRequest(request: Request): Promise<Response> {
+  const app = getApp();
+  const url = new URL(request.url);
+  const reply = emptyReply();
+  const cookieHeader = request.headers.get("cookie") || "";
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "";
+  try {
+    if (!url.pathname.startsWith("/api/")) {
+      send(reply, 404, { error: "Not found." });
+      return toWebResponse(reply);
+    }
+    await dispatchApi({
+      app,
+      reply,
+      method: request.method || "GET",
+      url,
+      cookieHeader,
+      ip,
+      bodyText: request.method === "GET" || request.method === "HEAD" ? "" : await request.text(),
+    });
+  } catch (error) {
+    if (error instanceof InputError) send(reply, 400, { error: error.message });
+    else {
+      console.error(error instanceof Error ? error.message : "Request failed");
+      if (!reply.headersSent) send(reply, 500, { error: "The installation could not complete that." });
+    }
+  }
+  return toWebResponse(reply);
+}
+
+async function handleNode(req: http.IncomingMessage, res: http.ServerResponse, app: AppContext) {
   const url = new URL(req.url || "/", "http://preserve.local");
   const ip = req.socket.remoteAddress || "";
   try {
@@ -80,26 +141,92 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, app: 
       serveStatic(req, res, url.pathname);
       return;
     }
-    const matched = matchRoute(req.method || "GET", url.pathname);
-    if (!matched) {
-      send(res, 404, { error: "Not found." });
-      return;
-    }
-    const body = matched.auth || req.method !== "GET" ? await readBody(req) : {};
-    const user = matched.auth ? userFromRequest(app, req) : null;
-    if (matched.auth && !user) {
-      send(res, 401, { error: "Sign in again." });
-      return;
-    }
-    await matched.handler({ req, res, url, params: matched.params, body, user, ip, app });
+    const reply = emptyReply();
+    const cookieHeader = typeof req.headers.cookie === "string" ? req.headers.cookie : "";
+    const bodyText =
+      req.method === "GET" || req.method === "HEAD" ? "" : await readRawBody(req);
+    await dispatchApi({
+      app,
+      reply,
+      method: req.method || "GET",
+      url,
+      cookieHeader,
+      ip,
+      bodyText,
+    });
+    writeNodeResponse(res, reply);
   } catch (error) {
     if (error instanceof InputError) {
-      send(res, 400, { error: error.message });
+      const reply = emptyReply();
+      send(reply, 400, { error: error.message });
+      writeNodeResponse(res, reply);
       return;
     }
     console.error(error instanceof Error ? error.message : "Request failed");
-    if (!res.headersSent) send(res, 500, { error: "The installation could not complete that." });
+    if (!res.headersSent) {
+      const reply = emptyReply();
+      send(reply, 500, { error: "The installation could not complete that." });
+      writeNodeResponse(res, reply);
+    }
   }
+}
+
+async function dispatchApi(input: {
+  app: AppContext;
+  reply: Reply;
+  method: string;
+  url: URL;
+  cookieHeader: string;
+  ip: string;
+  bodyText: string;
+}) {
+  const matched = matchRoute(input.method, input.url.pathname);
+  if (!matched) {
+    send(input.reply, 404, { error: "Not found." });
+    return;
+  }
+  let body: unknown = {};
+  if (matched.auth || input.method !== "GET") {
+    if (input.bodyText) {
+      try {
+        body = JSON.parse(input.bodyText);
+      } catch {
+        throw new InputError("The request was not valid JSON.");
+      }
+    }
+  }
+  const user = matched.auth ? userFromRequest(input.app, input.cookieHeader) : null;
+  if (matched.auth && !user) {
+    send(input.reply, 401, { error: "Sign in again." });
+    return;
+  }
+  await matched.handler({
+    cookieHeader: input.cookieHeader,
+    reply: input.reply,
+    url: input.url,
+    params: matched.params,
+    body,
+    user,
+    ip: input.ip,
+    app: input.app,
+  });
+}
+
+function toWebResponse(reply: Reply) {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(reply.headers)) {
+    if (key.toLowerCase() === "set-cookie") headers.append("set-cookie", value);
+    else headers.set(key, value);
+  }
+  return new Response(reply.body, { status: reply.status, headers });
+}
+
+function writeNodeResponse(res: http.ServerResponse, reply: Reply) {
+  const headers = { ...reply.headers };
+  const body = reply.body;
+  headers["content-length"] = String(Buffer.byteLength(body));
+  res.writeHead(reply.status, headers);
+  res.end(body);
 }
 
 function matchRoute(method: string, pathname: string) {
@@ -154,13 +281,13 @@ const routes: { method: string; pattern: string; auth: boolean; handler: Handler
 ];
 
 function health(_ctx: RequestContext) {
-  send(_ctx.res, 200, { ok: true, product: "PRESERVE" });
+  send(_ctx.reply, 200, { ok: true, product: "PRESERVE" });
 }
 
 function bootstrap(ctx: RequestContext) {
   const users = ctx.app.db.prepare("SELECT COUNT(*) AS n FROM users WHERE active = 1").get() as { n: number };
   // Unauthenticated bootstrap never returns passwords, emails, or roles.
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     demoBanner: false,
     hasUsers: users.n > 0,
     evaluationReady: evaluationActive(ctx.app),
@@ -175,7 +302,7 @@ function login(ctx: RequestContext) {
   const now = Date.now();
   const attempt = attempts.get(key);
   if (attempt && attempt.reset > now && attempt.count >= 8) {
-    send(ctx.res, 429, { error: "Too many attempts. Wait and try again." });
+    send(ctx.reply, 429, { error: "Too many attempts. Wait and try again." });
     return;
   }
   const row = findUserByEmail(ctx.app, email);
@@ -185,7 +312,7 @@ function login(ctx: RequestContext) {
     const fresh = !current || current.reset < now;
     attempts.set(key, { count: fresh ? 1 : current.count + 1, reset: fresh ? now + 15 * 60 * 1000 : current.reset });
     writeAudit(ctx, "auth.rejected", "user", undefined, "Rejected a sign-in.");
-    send(ctx.res, 401, { error: "Those credentials were not accepted." });
+    send(ctx.reply, 401, { error: "Those credentials were not accepted." });
     return;
   }
   attempts.delete(key);
@@ -196,31 +323,31 @@ function login(ctx: RequestContext) {
     .run(randomUUID(), row.id, sha256(token), expires, new Date().toISOString());
   ctx.app.db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
   writeAudit(ctx, "auth.login", "user", row.id, "Signed in.");
-  send(ctx.res, 200, { user: publicUser(row, ctx.app) }, { "set-cookie": sessionCookie(token) });
+  send(ctx.reply, 200, { user: publicUser(row, ctx.app) }, { "set-cookie": sessionCookie(token) });
 }
 
 function logout(ctx: RequestContext) {
-  const token = readCookie(ctx.req.headers.cookie, "preserve_session");
+  const token = readCookie(ctx.cookieHeader, "preserve_session");
   if (token) {
     ctx.app.db.prepare("UPDATE sessions SET revoked = 1 WHERE token_hash = ?").run(sha256(token));
   }
   writeAudit(ctx, "auth.logout", "user", ctx.user?.id, "Signed out.");
-  send(ctx.res, 200, { ok: true }, { "set-cookie": sessionCookie("", true) });
+  send(ctx.reply, 200, { ok: true }, { "set-cookie": sessionCookie("", true) });
 }
 
 function me(ctx: RequestContext) {
-  send(ctx.res, 200, { user: ctx.user, evaluationInstall: evaluationActive(ctx.app) });
+  send(ctx.reply, 200, { user: ctx.user, evaluationInstall: evaluationActive(ctx.app) });
 }
 
 function config(ctx: RequestContext) {
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     tileUrl: tileUrl(),
     attribution: "© OpenStreetMap",
   });
 }
 
 function posture(ctx: RequestContext) {
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     product: "PRESERVE",
     externalModelConfigured: false,
     caseDataLeavesHost: false,
@@ -241,13 +368,13 @@ function agencies(ctx: RequestContext) {
   const rows = ctx.app.db
     .prepare("SELECT id, name, short_name, kind FROM agencies ORDER BY name")
     .all() as { id: string; name: string; short_name: string; kind: string }[];
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     agencies: rows.map((row) => ({ id: row.id, name: row.name, shortName: row.short_name, kind: row.kind })),
   });
 }
 
 function createAgency(ctx: RequestContext) {
-  if (ctx.user?.role !== "superadmin") return send(ctx.res, 403, { error: "Only the registrar can add an agency." });
+  if (ctx.user?.role !== "superadmin") return send(ctx.reply, 403, { error: "Only the registrar can add an agency." });
   const body = asObject(ctx.body);
   const name = cleanText(body.name, 3, 80, "Agency name");
   const shortName = cleanText(body.shortName, 2, 8, "Short name").toUpperCase();
@@ -261,15 +388,15 @@ function createAgency(ctx: RequestContext) {
     .prepare("INSERT INTO agencies (id, name, short_name, kind, home_lat, home_lng, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(id, name, shortName, kind, lat, lng, new Date().toISOString());
   writeAudit(ctx, "agency.create", "agency", id, `Added agency ${shortName}.`);
-  send(ctx.res, 201, { id });
+  send(ctx.reply, 201, { id });
 }
 
 function directory(ctx: RequestContext) {
   if (!ctx.user || ctx.user.role === "field_officer" || ctx.user.role === "observer") {
-    return send(ctx.res, 403, { error: "You cannot open the directory." });
+    return send(ctx.reply, 403, { error: "You cannot open the directory." });
   }
   const rows = listUsers(ctx.app, ctx.user.role === "superadmin" ? undefined : ctx.user.agencyId).filter((user) => user.active);
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     users: rows.map((user) => ({
       id: user.id,
       displayName: user.display_name,
@@ -281,13 +408,13 @@ function directory(ctx: RequestContext) {
 }
 
 function users(ctx: RequestContext) {
-  if (!ctx.user || !canManageUsers(ctx.user.role)) return send(ctx.res, 403, { error: "You cannot manage accounts." });
+  if (!ctx.user || !canManageUsers(ctx.user.role)) return send(ctx.reply, 403, { error: "You cannot manage accounts." });
   const rows = listUsers(ctx.app, ctx.user.role === "superadmin" ? undefined : ctx.user.agencyId);
-  send(ctx.res, 200, { users: rows.map(presentUser) });
+  send(ctx.reply, 200, { users: rows.map(presentUser) });
 }
 
 function createUser(ctx: RequestContext) {
-  if (!ctx.user || !canManageUsers(ctx.user.role)) return send(ctx.res, 403, { error: "You cannot manage accounts." });
+  if (!ctx.user || !canManageUsers(ctx.user.role)) return send(ctx.reply, 403, { error: "You cannot manage accounts." });
   const body = asObject(ctx.body);
   const role = String(body.role ?? "");
   if (!isRole(role) || !canAssignRole(ctx.user.role, role)) throw new InputError("That role cannot be assigned.");
@@ -315,14 +442,14 @@ function createUser(ctx: RequestContext) {
       new Date().toISOString(),
     );
   writeAudit(ctx, "user.create", "user", id, `Added an account in role ${role}.`);
-  send(ctx.res, 201, { id });
+  send(ctx.reply, 201, { id });
 }
 
 function updateUser(ctx: RequestContext) {
-  if (!ctx.user || !canManageUsers(ctx.user.role)) return send(ctx.res, 403, { error: "You cannot manage accounts." });
+  if (!ctx.user || !canManageUsers(ctx.user.role)) return send(ctx.reply, 403, { error: "You cannot manage accounts." });
   const row = findUserById(ctx.app, ctx.params.id);
   if (!row || (ctx.user.role !== "superadmin" && row.agency_id !== ctx.user.agencyId)) {
-    return send(ctx.res, 404, { error: "Account not found." });
+    return send(ctx.reply, 404, { error: "Account not found." });
   }
   const body = asObject(ctx.body);
   if (body.role != null) {
@@ -351,12 +478,12 @@ function updateUser(ctx: RequestContext) {
     ctx.app.db.prepare("UPDATE sessions SET revoked = 1 WHERE user_id = ?").run(row.id);
   }
   writeAudit(ctx, "user.update", "user", row.id, "Updated an account.");
-  send(ctx.res, 200, { ok: true });
+  send(ctx.reply, 200, { ok: true });
 }
 
 function incidents(ctx: RequestContext) {
   const visible = visibleIncidents(ctx);
-  send(ctx.res, 200, { incidents: visible.map((item) => summarize(ctx, item)) });
+  send(ctx.reply, 200, { incidents: visible.map((item) => summarize(ctx, item)) });
 }
 
 function createIncident(ctx: RequestContext) {
@@ -364,7 +491,7 @@ function createIncident(ctx: RequestContext) {
   const body = asObject(ctx.body);
   const kind = String(body.kind ?? "") as IncidentKind;
   if (!KINDS.has(kind) || !canCreateIncident(ctx.user.role, kind)) {
-    return send(ctx.res, 403, { error: "You cannot open that kind of incident." });
+    return send(ctx.reply, 403, { error: "You cannot open that kind of incident." });
   }
   const classification = String(body.classification ?? "official");
   if (!CLASSIFICATIONS.has(classification)) throw new InputError("Classification is not recognised.");
@@ -395,21 +522,21 @@ function createIncident(ctx: RequestContext) {
       .run(id, userId, dutyForRole(person.role));
   }
   writeAudit(ctx, "incident.create", "incident", id, `Opened ${reference}.`);
-  send(ctx.res, 201, { id, reference });
+  send(ctx.reply, 201, { id, reference });
 }
 
 function incident(ctx: RequestContext) {
   const found = requireIncident(ctx);
   if (!found) return;
   writeAudit(ctx, "incident.view", "incident", found.row.id, `Viewed ${found.row.reference}.`);
-  send(ctx.res, 200, presentIncident(ctx, found));
+  send(ctx.reply, 200, presentIncident(ctx, found));
 }
 
 function updateIncident(ctx: RequestContext) {
   const found = requireIncident(ctx);
   if (!found) return;
   if (!canUpdateIncident(ctx.user!.role, found.sameAgency)) {
-    return send(ctx.res, 403, { error: "You cannot change this incident record." });
+    return send(ctx.reply, 403, { error: "You cannot change this incident record." });
   }
   const body = asObject(ctx.body);
   const secret = { ...found.secret };
@@ -433,14 +560,14 @@ function updateIncident(ctx: RequestContext) {
     .run(sealSecret(ctx.app.key, secret), status, classification, new Date().toISOString(), found.row.id);
   writeAudit(ctx, "incident.update", "incident", found.row.id, `Updated ${found.row.reference}.`);
   const next = requireIncident(ctx);
-  if (next) send(ctx.res, 200, presentIncident(ctx, next));
+  if (next) send(ctx.reply, 200, presentIncident(ctx, next));
 }
 
 function addMember(ctx: RequestContext) {
   const found = requireIncident(ctx);
   if (!found) return;
   if (!canUpdateIncident(ctx.user!.role, found.sameAgency)) {
-    return send(ctx.res, 403, { error: "You cannot change who is on this incident." });
+    return send(ctx.reply, 403, { error: "You cannot change who is on this incident." });
   }
   const body = asObject(ctx.body);
   const person = findUserById(ctx.app, String(body.userId ?? ""));
@@ -456,26 +583,26 @@ function addMember(ctx: RequestContext) {
     )
     .run(found.row.id, person.id, duty);
   writeAudit(ctx, "incident.member", "incident", found.row.id, `Updated membership on ${found.row.reference}.`);
-  send(ctx.res, 200, { ok: true });
+  send(ctx.reply, 200, { ok: true });
 }
 
 function removeMember(ctx: RequestContext) {
   const found = requireIncident(ctx);
   if (!found) return;
   if (!canUpdateIncident(ctx.user!.role, found.sameAgency)) {
-    return send(ctx.res, 403, { error: "You cannot change who is on this incident." });
+    return send(ctx.reply, 403, { error: "You cannot change who is on this incident." });
   }
   if (ctx.params.userId === found.row.created_by) throw new InputError("The opening officer stays on the incident.");
   ctx.app.db.prepare("DELETE FROM incident_members WHERE incident_id = ? AND user_id = ?").run(found.row.id, ctx.params.userId);
   writeAudit(ctx, "incident.member_remove", "incident", found.row.id, `Removed a member from ${found.row.reference}.`);
-  send(ctx.res, 200, { ok: true });
+  send(ctx.reply, 200, { ok: true });
 }
 
 function addGrant(ctx: RequestContext) {
   const found = requireIncident(ctx);
   if (!found) return;
   if (!canUpdateIncident(ctx.user!.role, found.sameAgency)) {
-    return send(ctx.res, 403, { error: "You cannot share this incident." });
+    return send(ctx.reply, 403, { error: "You cannot share this incident." });
   }
   const body = asObject(ctx.body);
   const agencyId = String(body.agencyId ?? "");
@@ -493,18 +620,18 @@ function addGrant(ctx: RequestContext) {
     )
     .run(id, found.row.id, agencyId, permission, ctx.user!.id, new Date().toISOString());
   writeAudit(ctx, "incident.grant", "incident", found.row.id, `Shared ${found.row.reference} (${permission}).`);
-  send(ctx.res, 200, { ok: true });
+  send(ctx.reply, 200, { ok: true });
 }
 
 function removeGrant(ctx: RequestContext) {
   const found = requireIncident(ctx);
   if (!found) return;
   if (!canUpdateIncident(ctx.user!.role, found.sameAgency)) {
-    return send(ctx.res, 403, { error: "You cannot change sharing." });
+    return send(ctx.reply, 403, { error: "You cannot change sharing." });
   }
   ctx.app.db.prepare("DELETE FROM incident_grants WHERE id = ? AND incident_id = ?").run(ctx.params.grantId, found.row.id);
   writeAudit(ctx, "incident.grant_remove", "incident", found.row.id, `Removed a share on ${found.row.reference}.`);
-  send(ctx.res, 200, { ok: true });
+  send(ctx.reply, 200, { ok: true });
 }
 
 async function createPlan(ctx: RequestContext) {
@@ -514,7 +641,7 @@ async function createPlan(ctx: RequestContext) {
   const module = String(body.module ?? "") as ModuleName;
   if (!KINDS.has(module)) throw new InputError("Choose a planning module.");
   if (!canRunPlan(ctx.user!.role, module, found.sameAgency, found.grant)) {
-    return send(ctx.res, 403, { error: "Your role cannot run that plan." });
+    return send(ctx.reply, 403, { error: "Your role cannot run that plan." });
   }
   const executed = await executePlan(ctx.app, module, body.input, {
     ways: body.ways,
@@ -532,7 +659,7 @@ async function createPlan(ctx: RequestContext) {
     .run(id, found.row.id, module, version, sealSecret(ctx.app.key, secret), ctx.user!.id, createdAt);
   ctx.app.db.prepare("UPDATE incidents SET updated_at = ? WHERE id = ?").run(createdAt, found.row.id);
   writeAudit(ctx, "plan.create", "plan", id, `Ran ${module} v${version} on ${found.row.reference}.`);
-  send(ctx.res, 201, {
+  send(ctx.reply, 201, {
     plan: {
       id,
       incidentId: found.row.id,
@@ -548,14 +675,14 @@ async function createPlan(ctx: RequestContext) {
 }
 
 function auditList(ctx: RequestContext) {
-  if (!ctx.user || !canViewAudit(ctx.user.role)) return send(ctx.res, 403, { error: "You cannot read the audit log." });
+  if (!ctx.user || !canViewAudit(ctx.user.role)) return send(ctx.reply, 403, { error: "You cannot read the audit log." });
   const rows =
     ctx.user.role === "superadmin"
       ? (ctx.app.db.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all() as AuditRow[])
       : (ctx.app.db
           .prepare("SELECT * FROM audit_log WHERE agency_id = ? ORDER BY id DESC LIMIT 300")
           .all(ctx.user.agencyId) as AuditRow[]);
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     entries: rows.map((row) => ({
       id: row.id,
       at: row.at,
@@ -613,7 +740,7 @@ function visibleIncidents(ctx: RequestContext) {
 function requireIncident(ctx: RequestContext) {
   const row = ctx.app.db.prepare("SELECT * FROM incidents WHERE id = ?").get(ctx.params.id) as IncidentRow | undefined;
   if (!row || !ctx.user) {
-    send(ctx.res, 404, { error: "Incident not found." });
+    send(ctx.reply, 404, { error: "Incident not found." });
     return null;
   }
   const member = Boolean(
@@ -623,7 +750,7 @@ function requireIncident(ctx: RequestContext) {
   const grant = grantFor(ctx.app, row.id, ctx.user.agencyId);
   if (!canViewIncident({ role: ctx.user.role, sameAgency, grant, member })) {
     writeAudit(ctx, "incident.denied", "incident", row.id, "Denied an incident request.");
-    send(ctx.res, 404, { error: "Incident not found." });
+    send(ctx.reply, 404, { error: "Incident not found." });
     return null;
   }
   return { row, secret: openSecret<IncidentSecret>(ctx.app.key, row.secret), sameAgency, grant, member };
@@ -859,7 +986,7 @@ function upsertPresence(ctx: RequestContext) {
          heading = excluded.heading, incident_id = excluded.incident_id, updated_at = excluded.updated_at`,
     )
     .run(ctx.user!.id, lat, lng, Number.isFinite(accuracy as number) ? accuracy : null, Number.isFinite(heading as number) ? heading : null, incidentId, now);
-  send(ctx.res, 200, { ok: true, updatedAt: now });
+  send(ctx.reply, 200, { ok: true, updatedAt: now });
 }
 
 function listPresence(ctx: RequestContext) {
@@ -871,12 +998,12 @@ function listPresence(ctx: RequestContext) {
   let memberIds = new Set<string>();
   if (scope === "incident") {
     if (!incidentId) {
-      send(ctx.res, 400, { error: "An incident is required for that presence view." });
+      send(ctx.reply, 400, { error: "An incident is required for that presence view." });
       return;
     }
     const row = ctx.app.db.prepare("SELECT * FROM incidents WHERE id = ?").get(incidentId) as IncidentRow | undefined;
     if (!row) {
-      send(ctx.res, 404, { error: "Incident not found." });
+      send(ctx.reply, 404, { error: "Incident not found." });
       return;
     }
     const member = Boolean(
@@ -886,7 +1013,7 @@ function listPresence(ctx: RequestContext) {
     const grant = grantFor(ctx.app, row.id, viewer.agencyId);
     if (!canViewIncident({ role: viewer.role, sameAgency, grant, member })) {
       writeAudit(ctx, "presence.denied", "incident", row.id, "Denied a presence request.");
-      send(ctx.res, 404, { error: "Incident not found." });
+      send(ctx.reply, 404, { error: "Incident not found." });
       return;
     }
     memberIds = new Set(
@@ -895,7 +1022,7 @@ function listPresence(ctx: RequestContext) {
       ),
     );
   } else if (scope !== "agency") {
-    send(ctx.res, 400, { error: "Choose incident or agency presence." });
+    send(ctx.reply, 400, { error: "Choose incident or agency presence." });
     return;
   }
 
@@ -942,7 +1069,7 @@ function listPresence(ctx: RequestContext) {
     return false;
   });
 
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     scope,
     positions: visible.map((row) => ({
       userId: row.user_id,
@@ -988,7 +1115,7 @@ function listLights(ctx: RequestContext) {
       /* ignore bad cache rows */
     }
   }
-  send(ctx.res, 200, {
+  send(ctx.reply, 200, {
     lights: [
       ...agency.map((light) => ({ id: light.id, lat: light.lat, lng: light.lng, label: light.label || "Agency light", source: "agency" as const })),
       ...osm.map((light) => ({ id: light.id, lat: light.lat, lng: light.lng, label: "Street light", source: "osm" as const })),
@@ -999,7 +1126,7 @@ function listLights(ctx: RequestContext) {
 function createLight(ctx: RequestContext) {
   const role = ctx.user!.role;
   if (role !== "superadmin" && role !== "agency_admin" && role !== "commander" && role !== "planner") {
-    send(ctx.res, 403, { error: "Your role cannot add agency lights." });
+    send(ctx.reply, 403, { error: "Your role cannot add agency lights." });
     return;
   }
   const body = asObject(ctx.body);
@@ -1012,11 +1139,11 @@ function createLight(ctx: RequestContext) {
     .prepare("INSERT INTO agency_lights (id, agency_id, lat, lng, label, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(id, ctx.user!.agencyId, lat, lng, body.label ? String(body.label).slice(0, 80) : "Agency light", ctx.user!.id, now);
   writeAudit(ctx, "light.create", "light", id, "Added an agency street light.");
-  send(ctx.res, 201, { id, lat, lng, label: body.label || "Agency light", source: "agency" });
+  send(ctx.reply, 201, { id, lat, lng, label: body.label || "Agency light", source: "agency" });
 }
 
-function userFromRequest(app: AppContext, req: http.IncomingMessage): AuthUser | null {
-  const token = readCookie(req.headers.cookie, "preserve_session");
+function userFromRequest(app: AppContext, cookieHeader: string): AuthUser | null {
+  const token = readCookie(cookieHeader, "preserve_session");
   if (!token) return null;
   const row = app.db
     .prepare("SELECT user_id, expires_at, revoked FROM sessions WHERE token_hash = ?")
@@ -1083,8 +1210,17 @@ function tileUrl() {
   return "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 }
 
+function useSecureCookies() {
+  return (
+    process.env.PRESERVE_ENV === "production" ||
+    Boolean(process.env.CURSOR_APP_ID) ||
+    process.env.VERCEL === "1" ||
+    process.env.NODE_ENV === "production"
+  );
+}
+
 function sessionCookie(token: string, clear = false) {
-  const secure = process.env.PRESERVE_ENV === "production" ? "; Secure" : "";
+  const secure = useSecureCookies() ? "; Secure" : "";
   return `preserve_session=${clear ? "" : token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${clear ? 0 : SESSION_MS / 1000}${secure}`;
 }
 
@@ -1097,21 +1233,21 @@ function readCookie(header: string | undefined, name: string) {
   return "";
 }
 
-function send(res: http.ServerResponse, status: number, data: unknown, extra: Record<string, string> = {}) {
-  const body = JSON.stringify(data);
-  res.writeHead(status, {
+function send(reply: Reply, status: number, data: unknown, extra: Record<string, string> = {}) {
+  reply.status = status;
+  reply.headers = {
     "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
     "x-frame-options": "DENY",
     ...extra,
-  });
-  res.end(body);
+  };
+  reply.body = JSON.stringify(data);
+  reply.headersSent = true;
 }
 
-function readBody(req: http.IncomingMessage): Promise<unknown> {
+function readRawBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -1122,17 +1258,7 @@ function readBody(req: http.IncomingMessage): Promise<unknown> {
         req.destroy();
       } else chunks.push(chunk);
     });
-    req.on("end", () => {
-      if (!chunks.length) {
-        resolve({});
-        return;
-      }
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        reject(new InputError("The request was not valid JSON."));
-      }
-    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -1179,12 +1305,16 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, pathna
   const relative = pathname === "/" ? "/index.html" : pathname;
   const target = path.normalize(path.join(root, relative));
   if (!target.startsWith(root)) {
-    send(res, 403, { error: "Not found." });
+    const reply = emptyReply();
+    send(reply, 403, { error: "Not found." });
+    writeNodeResponse(res, reply);
     return;
   }
   const file = fs.existsSync(target) && fs.statSync(target).isFile() ? target : path.join(root, "index.html");
   if (!fs.existsSync(file)) {
-    send(res, 404, { error: "The interface has not been built." });
+    const reply = emptyReply();
+    send(reply, 404, { error: "The interface has not been built." });
+    writeNodeResponse(res, reply);
     return;
   }
   const ext = path.extname(file);

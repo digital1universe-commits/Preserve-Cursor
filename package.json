@@ -8,8 +8,11 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "start": "node --disable-warning=ExperimentalWarning --import tsx src/server/index.ts",
-    "build": "vite build",
+    "dev:next": "next dev -H 0.0.0.0 -p 3000",
+    "start": "next start -H 0.0.0.0",
+    "start:node": "node --disable-warning=ExperimentalWarning --import tsx src/server/index.ts",
+    "build": "next build",
+    "build:static": "vite build",
     "test": "node --disable-warning=ExperimentalWarning --test-concurrency=1 --import tsx --test src/engine/engine.test.ts src/server/security.test.ts",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/make-icons.mjs"
@@ -20,6 +23,7 @@
     "@fontsource/source-sans-3": "^5.2.5",
     "leaflet": "^1.9.4",
     "maplibre-gl": "^4.7.1",
+    "next": "^15.5.29",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.30.1",

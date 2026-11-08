@@ -1,6 +1,7 @@
 node_modules
 dist
 data
+.next
 *.local
 .DS_Store
 dev-dist
