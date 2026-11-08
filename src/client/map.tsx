@@ -137,7 +137,13 @@ export function OperationMap(props: Props) {
         iconAnchor: [width / 2, 8],
       });
       const placed = L.marker([marker.lat, marker.lng], { icon, keyboard: true }).addTo(group);
-      if (marker.detail) placed.bindTooltip(marker.detail, { direction: "top", offset: [0, -8] });
+      if (marker.detail) {
+        placed.bindTooltip(escapeHtml(marker.detail), {
+          direction: "top",
+          offset: [0, -8],
+          opacity: 0.95,
+        });
+      }
       bounds.extend([marker.lat, marker.lng]);
     }
     for (const polygon of props.polygons ?? []) polygon.points.forEach((point) => bounds.extend([point.lat, point.lng]));

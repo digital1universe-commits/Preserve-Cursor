@@ -81,6 +81,21 @@ test("accounts, grants, and plans stay inside the installation", async () => {
   );
   const hidden = await fetch(`${base}/api/incidents/inc-land`, { headers: { cookie: fieldCookie } });
   assert.equal(hidden.status, 404);
+  await fetch(`${base}/api/presence`, {
+    method: "PUT",
+    headers: { cookie: fieldCookie, "content-type": "application/json" },
+    body: JSON.stringify({ lat: -36.83, lng: 174.8, incidentId: "inc-cordon" }),
+  });
+  const deniedPresence = await fetch(`${base}/api/presence?scope=incident&incidentId=inc-land`, {
+    headers: { cookie: fieldCookie },
+  });
+  assert.equal(deniedPresence.status, 404);
+  const allowedPresence = await fetch(`${base}/api/presence?scope=incident&incidentId=inc-cordon`, {
+    headers: { cookie: fieldCookie },
+  });
+  assert.equal(allowedPresence.status, 200);
+  const presenceBody = await allowedPresence.json();
+  assert.ok(Array.isArray(presenceBody.positions));
   const denied = await fetch(`${base}/api/incidents/inc-cordon/plans`, {
     method: "POST",
     headers: { cookie: fieldCookie, "content-type": "application/json" },

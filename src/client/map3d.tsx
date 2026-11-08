@@ -80,7 +80,7 @@ export function Map3D(props: Props) {
     const markers: maplibregl.Marker[] = [];
     for (const marker of props.markers) {
       const el = document.createElement("span");
-      el.className = `pin-face pin-${marker.tone}`;
+      el.className = `pin-face pin-${String(marker.tone).replace(/[^a-z0-9_-]/gi, "") || "pin"}`;
       el.textContent = marker.label;
       markers.push(new maplibregl.Marker({ element: el }).setLngLat([marker.lng, marker.lat]).addTo(map));
     }

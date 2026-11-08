@@ -829,7 +829,27 @@ function upsertPresence(ctx: RequestContext) {
   if (!Number.isFinite(lng) || lng < -180 || lng > 180) throw new InputError("Longitude is not valid.");
   const accuracy = body.accuracyM == null || body.accuracyM === "" ? null : Number(body.accuracyM);
   const heading = body.heading == null || body.heading === "" ? null : Number(body.heading);
-  const incidentId = body.incidentId ? String(body.incidentId) : null;
+  let incidentId = body.incidentId ? String(body.incidentId) : null;
+  if (incidentId) {
+    const row = ctx.app.db.prepare("SELECT * FROM incidents WHERE id = ?").get(incidentId) as IncidentRow | undefined;
+    const member = Boolean(
+      row &&
+        ctx.app.db.prepare("SELECT 1 AS ok FROM incident_members WHERE incident_id = ? AND user_id = ?").get(row.id, ctx.user!.id),
+    );
+    const sameAgency = Boolean(row && row.agency_id === ctx.user!.agencyId);
+    const grant = row ? grantFor(ctx.app, row.id, ctx.user!.agencyId) : "none";
+    if (
+      !row ||
+      !canViewIncident({
+        role: ctx.user!.role,
+        sameAgency,
+        grant,
+        member,
+      })
+    ) {
+      incidentId = null;
+    }
+  }
   const now = new Date().toISOString();
   ctx.app.db
     .prepare(
@@ -847,6 +867,38 @@ function listPresence(ctx: RequestContext) {
   const incidentId = ctx.url.searchParams.get("incidentId");
   const viewer = ctx.user!;
   const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
+  let memberIds = new Set<string>();
+  if (scope === "incident") {
+    if (!incidentId) {
+      send(ctx.res, 400, { error: "An incident is required for that presence view." });
+      return;
+    }
+    const row = ctx.app.db.prepare("SELECT * FROM incidents WHERE id = ?").get(incidentId) as IncidentRow | undefined;
+    if (!row) {
+      send(ctx.res, 404, { error: "Incident not found." });
+      return;
+    }
+    const member = Boolean(
+      ctx.app.db.prepare("SELECT 1 AS ok FROM incident_members WHERE incident_id = ? AND user_id = ?").get(row.id, viewer.id),
+    );
+    const sameAgency = row.agency_id === viewer.agencyId;
+    const grant = grantFor(ctx.app, row.id, viewer.agencyId);
+    if (!canViewIncident({ role: viewer.role, sameAgency, grant, member })) {
+      writeAudit(ctx, "presence.denied", "incident", row.id, "Denied a presence request.");
+      send(ctx.res, 404, { error: "Incident not found." });
+      return;
+    }
+    memberIds = new Set(
+      (ctx.app.db.prepare("SELECT user_id FROM incident_members WHERE incident_id = ?").all(incidentId) as { user_id: string }[]).map(
+        (item) => item.user_id,
+      ),
+    );
+  } else if (scope !== "agency") {
+    send(ctx.res, 400, { error: "Choose incident or agency presence." });
+    return;
+  }
+
   const rows = ctx.app.db
     .prepare(
       `SELECT p.user_id, p.lat, p.lng, p.accuracy_m, p.heading, p.incident_id, p.updated_at,
@@ -875,23 +927,15 @@ function listPresence(ctx: RequestContext) {
     conceal_from_agency: number | null;
   }[];
 
-  const memberIds = new Set<string>();
-  if (incidentId) {
-    const members = ctx.app.db.prepare("SELECT user_id FROM incident_members WHERE incident_id = ?").all(incidentId) as { user_id: string }[];
-    for (const member of members) memberIds.add(member.user_id);
-  }
-
   const visible = rows.filter((row) => {
     if (row.user_id === viewer.id) return true;
     const concealed = Boolean(row.conceal_from_agency);
     const sameUnit = Boolean(viewer.unitId && row.unit_id && viewer.unitId === row.unit_id);
     if (concealed && !sameUnit) {
-      // Private units stay hidden from the wider organisation, but remain visible to colleagues on the same incident.
       if (!(scope === "incident" && incidentId && memberIds.has(row.user_id) && memberIds.has(viewer.id))) return false;
     }
     if (scope === "agency") return row.agency_id === viewer.agencyId;
     if (scope === "incident") {
-      if (!incidentId) return false;
       if (memberIds.has(row.user_id)) return true;
       return row.agency_id === viewer.agencyId && row.incident_id === incidentId;
     }
