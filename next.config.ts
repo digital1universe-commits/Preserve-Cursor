@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Host project settings expect a "dist" output directory (from the earlier Vite desk).
+  distDir: "dist",
   reactStrictMode: true,
   poweredByHeader: false,
   serverExternalPackages: [],

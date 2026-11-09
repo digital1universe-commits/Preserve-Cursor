@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
@@ -13,13 +17,31 @@
     "isolatedModules": true,
     "allowJs": true,
     "incremental": true,
-    "plugins": [{ "name": "next" }],
-    "types": ["node", "vite/client"],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "types": [
+      "node",
+      "vite/client"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@engine/*": ["src/engine/*"]
+      "@engine/*": [
+        "src/engine/*"
+      ]
     }
   },
-  "include": ["next-env.d.ts", "app", "src", "vite.config.ts", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    ".next/types/**/*.ts",
+    "app",
+    "next-env.d.ts",
+    "src",
+    "vite.config.ts",
+    "dist/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
