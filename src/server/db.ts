@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { decryptJson, encryptJson, hashPassword, loadMasterKey } from "./crypto.js";
+import { decryptJson, encryptJson, hashPassword, loadMasterKey, verifyPassword } from "./crypto.js";
 import type { Role } from "./rbac.js";
 
 export type IncidentSecret = {
@@ -33,6 +33,7 @@ export function openContext(dataDir = process.env.PRESERVE_DATA_DIR || path.join
   migrate(db);
   seed(db, key);
   ensureOperationalExtras(db, key);
+  syncEvaluationPasswords(db);
   return { db, key, dataDir };
 }
 
@@ -163,6 +164,19 @@ function ensureColumn(db: DatabaseSync, table: string, column: string, definitio
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (rows.some((row) => row.name === column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function syncEvaluationPasswords(db: DatabaseSync) {
+  const evalPassword = process.env.PRESERVE_EVAL_PASSWORD?.trim();
+  if (!evalPassword) return;
+  const sample = db.prepare("SELECT password_hash FROM users WHERE evaluation = 1 AND active = 1 LIMIT 1").get() as
+    | { password_hash: string }
+    | undefined;
+  if (!sample) return;
+  if (verifyPassword(evalPassword, sample.password_hash)) return;
+  const password = hashPassword(evalPassword);
+  db.prepare("UPDATE users SET password_hash = ? WHERE evaluation = 1 AND active = 1").run(password);
+  db.prepare("UPDATE sessions SET revoked = 1 WHERE user_id IN (SELECT id FROM users WHERE evaluation = 1)").run();
 }
 
 function seed(db: DatabaseSync, key: Buffer) {
