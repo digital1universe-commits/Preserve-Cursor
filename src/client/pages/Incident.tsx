@@ -1,0 +1,1477 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { CATEGORY_OPTIONS, suggestCategory, type SubjectCategory } from "../../engine/land.js";
+import { VESSEL_OPTIONS, type VesselKind } from "../../engine/marine.js";
+import type { LatLng } from "../../engine/geo.js";
+import { ApiError, api, type IncidentDetail, type PlanRecord } from "../api";
+import { useAuth } from "../auth";
+import { CLASS_LABEL, coord, formatKm, formatNm, formatWhen, KIND_LABEL, STATUS_LABEL } from "../format";
+import { runOnDevice, type DeviceContext } from "../local";
+import { OperationMap, type MapMarker } from "../map";
+import { Map3D } from "../map3d";
+import { kvGet, kvSet, outboxAdd } from "../offline";
+import { fetchPresence, type PresenceScope } from "../presence";
+import type { PresencePin } from "../api";
+
+const MODULES = ["cordon", "containment", "land_sar", "marine_sar", "public_order", "record"] as const;
+const TRAINING_ORDER_START = { lat: -36.833, lng: 174.7955 };
+const TRAINING_ORDER_END = { lat: -36.8288, lng: 174.7995 };
+const TRAINING_AREA: LatLng[] = [
+  { lat: -36.8272, lng: 174.7925 },
+  { lat: -36.8272, lng: 174.8015 },
+  { lat: -36.8335, lng: 174.8015 },
+  { lat: -36.8335, lng: 174.7925 },
+];
+
+type LockedPost = {
+  id: string;
+  kind: "scene" | "escape" | "search" | "rvp" | "command";
+  position: LatLng;
+  label: string;
+  side?: "north" | "east" | "south" | "west";
+  locked: true;
+  sectorBearing?: number;
+  rationale: string;
+};
+
+type CordonForm = {
+  subject: LatLng;
+  structure: string;
+  risk: string;
+  escapeRadiusM: string;
+  footprint: LatLng[];
+  footprintClosed: boolean;
+  lockedPosts: LockedPost[];
+};
+type LandForm = {
+  category: SubjectCategory;
+  ageYears: string;
+  mentalState: string;
+  areaKnowledge: string;
+  mobility: string;
+  terrain: string;
+  conditions: string;
+  hoursMissing: string;
+  lkp: LatLng;
+  downslopeBearing: string;
+  intendedBearing: string;
+  features: { roads: boolean; water: boolean; coastline: boolean; trails: boolean };
+};
+type MarineForm = {
+  lkp: LatLng;
+  hoursMissing: string;
+  vessel: VesselKind;
+  lengthM: string;
+  positionErrorNm: string;
+  windSpeedKn: string;
+  windFromDeg: string;
+  currentSpeedKn: string;
+  currentTowardDeg: string;
+};
+type PublicOrderForm = {
+  mode: "endpoints" | "draw";
+  start: LatLng | null;
+  end: LatLng | null;
+  drawn: LatLng[];
+  serials: string;
+  traffic: string;
+  protection: string;
+  mobile: string;
+  corridorM: string;
+  opposing: LatLng | null;
+  placing: "start" | "end" | "opposing" | "draw";
+};
+
+export function IncidentPage() {
+  const { id = "" } = useParams();
+  const auth = useAuth();
+  const [detail, setDetail] = useState<IncidentDetail | null>(null);
+  const [error, setError] = useState("");
+  const [module, setModule] = useState<string>("cordon");
+  const [plan, setPlan] = useState<PlanRecord | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tiles, setTiles] = useState(true);
+  const [tileUrl, setTileUrl] = useState("https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+  const [frame, setFrame] = useState(0);
+  const [polygon, setPolygon] = useState<LatLng[]>([]);
+  const [polygonClosed, setPolygonClosed] = useState(false);
+  const [cordon, setCordon] = useState<CordonForm | null>(null);
+  const [land, setLand] = useState<LandForm | null>(null);
+  const [marine, setMarine] = useState<MarineForm | null>(null);
+  const [order, setOrder] = useState<PublicOrderForm | null>(null);
+  const [context, setContext] = useState<DeviceContext>({});
+  const [mapMode, setMapMode] = useState<"flat" | "terrain">("flat");
+  const [showLights, setShowLights] = useState(false);
+  const [showPeople, setShowPeople] = useState(true);
+  const [presenceScope, setPresenceScope] = useState<PresenceScope>("incident");
+  const [people, setPeople] = useState<PresencePin[]>([]);
+  const [lights, setLights] = useState<{ id: string; lat: number; lng: number; label: string; source: string }[]>([]);
+
+  useEffect(() => {
+    let stop = false;
+    async function load() {
+      setError("");
+      try {
+        const data = auth.online
+          ? await api<IncidentDetail>(`/api/incidents/${id}`)
+          : await kvGet<IncidentDetail>(`incident:${id}`);
+        if (!data) throw new Error("This incident is not stored on this device. Open it once while the link is up.");
+        if (stop) return;
+        setDetail(data);
+        if (auth.online) await kvSet(`incident:${id}`, data);
+        setModule(data.incident.kind);
+        const point = { lat: data.incident.lat, lng: data.incident.lng };
+        setCordon({
+          subject: point,
+          structure: "detached",
+          risk: "unknown",
+          escapeRadiusM: "",
+          footprint: [],
+          footprintClosed: true,
+          lockedPosts: [],
+        });
+        setLand({
+          category: "general_adult",
+          ageYears: "",
+          mentalState: "unknown",
+          areaKnowledge: "none",
+          mobility: "average",
+          terrain: "suburban",
+          conditions: "clear",
+          hoursMissing: "3",
+          lkp: point,
+          downslopeBearing: "",
+          intendedBearing: "",
+          features: { roads: true, water: false, coastline: false, trails: false },
+        });
+        setMarine({
+          lkp: point,
+          hoursMissing: "4",
+          vessel: "cabin_cruiser",
+          lengthM: "12",
+          positionErrorNm: "0.25",
+          windSpeedKn: "",
+          windFromDeg: "",
+          currentSpeedKn: "",
+          currentTowardDeg: "",
+        });
+        setOrder({
+          mode: "endpoints",
+          start: point,
+          end: null,
+          drawn: [],
+          serials: "12",
+          traffic: "6",
+          protection: "6",
+          mobile: "4",
+          corridorM: "45",
+          opposing: null,
+          placing: "end",
+        });
+        const cached = await kvGet<DeviceContext>(`context:${id}`);
+        if (cached) setContext(cached);
+        const latest = data.plans.find((item) => item.module === data.incident.kind);
+        if (latest) setPlan(latest);
+        setFrame((value) => value + 1);
+      } catch (reason) {
+        if (!stop) setError(reason instanceof Error ? reason.message : "The incident could not be opened.");
+      }
+    }
+    void load();
+    if (auth.online) {
+      api<{ tileUrl: string }>("/api/config")
+        .then((config) => setTileUrl(config.tileUrl))
+        .catch(() => undefined);
+    }
+    return () => {
+      stop = true;
+    };
+  }, [id, auth.online]);
+
+  const center = useMemo(() => {
+    if (module === "containment" && polygon[0]) return polygon[0];
+    if (module === "land_sar" && land) return land.lkp;
+    if (module === "marine_sar" && marine) return marine.lkp;
+    if (module === "public_order" && order?.start) return order.start;
+    if (cordon) return cordon.subject;
+    if (detail) return { lat: detail.incident.lat, lng: detail.incident.lng };
+    return { lat: -36.83, lng: 174.8 };
+  }, [module, polygon, land, marine, cordon, order, detail]);
+
+  useEffect(() => {
+    if (!auth.online || !showPeople) {
+      setPeople([]);
+      return;
+    }
+    let stop = false;
+    async function load() {
+      try {
+        const positions = await fetchPresence(presenceScope, id);
+        if (!stop) setPeople(positions);
+      } catch {
+        if (!stop) setPeople([]);
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 10_000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [auth.online, showPeople, presenceScope, id]);
+
+  useEffect(() => {
+    if (!auth.online || !showLights || !center) {
+      setLights([]);
+      return;
+    }
+    let stop = false;
+    const pad = 0.01;
+    const query = new URLSearchParams({
+      south: String(center.lat - pad),
+      west: String(center.lng - pad),
+      north: String(center.lat + pad),
+      east: String(center.lng + pad),
+    });
+    api<{ lights: { id: string; lat: number; lng: number; label: string; source: string }[] }>(`/api/lights?${query}`)
+      .then((data) => {
+        if (!stop) setLights(data.lights);
+      })
+      .catch(() => {
+        if (!stop) setLights(context.lights?.map((light) => ({ id: light.id, lat: light.position.lat, lng: light.position.lng, label: "Street light", source: light.source })) ?? []);
+      });
+    return () => {
+      stop = true;
+    };
+  }, [auth.online, showLights, center, context.lights]);
+
+  const graphics = useMemo(() => {
+    const base = graphicsFor(module, plan, cordon, land, marine, order, polygon, polygonClosed);
+    if (showPeople) {
+      for (const person of people) {
+        base.markers.push({
+          id: `unit-${person.userId}`,
+          lat: person.lat,
+          lng: person.lng,
+          label: person.callsign,
+          tone: "presence",
+          detail: person.name ? `${person.callsign} · ${person.name}` : person.callsign,
+        });
+      }
+    }
+    if (showLights) {
+      for (const light of lights) {
+        base.markers.push({
+          id: `light-${light.id}`,
+          lat: light.lat,
+          lng: light.lng,
+          label: "LT",
+          tone: "light",
+          detail: `${light.label} (${light.source})`,
+        });
+      }
+    }
+    return base;
+  }, [module, plan, cordon, land, marine, order, polygon, polygonClosed, showPeople, people, showLights, lights]);
+
+  function onMapClick(point: LatLng) {
+    if (!detail?.can.plan[module]) return;
+    if (module === "containment") {
+      if (polygonClosed) return;
+      setPolygon((current) => [...current, point]);
+      return;
+    }
+    if (module === "cordon" && cordon) {
+      if (!cordon.footprintClosed) setCordon({ ...cordon, footprint: [...cordon.footprint, point] });
+      else setCordon({ ...cordon, subject: point });
+      return;
+    }
+    if (module === "public_order" && order) {
+      if (order.placing === "draw" || order.mode === "draw") {
+        setOrder({ ...order, mode: "draw", placing: "draw", drawn: [...order.drawn, point] });
+        return;
+      }
+      if (order.placing === "start") {
+        setOrder({ ...order, start: point, placing: order.end ? "start" : "end" });
+        return;
+      }
+      if (order.placing === "end") {
+        setOrder({ ...order, end: point });
+        return;
+      }
+      if (order.placing === "opposing") {
+        setOrder({ ...order, opposing: point });
+        return;
+      }
+    }
+    if (module === "land_sar" && land) setLand({ ...land, lkp: point });
+    if (module === "marine_sar" && marine) setMarine({ ...marine, lkp: point });
+  }
+
+  async function build() {
+    if (!detail) return;
+    setBusy(true);
+    setError("");
+    const input = inputFor(module, cordon, land, marine, order, polygon);
+    const environment = marineEnvironment(marine);
+    try {
+      if (!input) throw new Error("Complete the plan inputs first.");
+      if (auth.online) {
+        const response = await api<{ plan: PlanRecord; context: DeviceContext }>(`/api/incidents/${id}/plans`, {
+          method: "POST",
+          body: JSON.stringify({ module, input, environment }),
+        });
+        setPlan(response.plan);
+        setDetail({ ...detail, plans: [response.plan, ...detail.plans] });
+        const next = { ...context, ...stripEmpty(response.context) };
+        setContext(next);
+        await kvSet(`context:${id}`, next);
+        if (module === "marine_sar" && response.context.environment && marine) {
+          const sample = response.context.environment;
+          setMarine({
+            ...marine,
+            windSpeedKn: String(Math.round(sample.windSpeedKn * 10) / 10),
+            windFromDeg: String(Math.round(sample.windFromDeg)),
+            currentSpeedKn: String(Math.round((sample.currentSpeedKn ?? 0) * 100) / 100),
+            currentTowardDeg: String(Math.round(sample.currentTowardDeg ?? 0)),
+          });
+        }
+      } else {
+        const output = runOnDevice(module, input, {
+          ...context,
+          environment: environment ?? context.environment,
+        }) as Record<string, unknown>;
+        const localPlan: PlanRecord = {
+          id: `local-${Date.now()}`,
+          module,
+          version: 0,
+          createdAt: new Date().toISOString(),
+          createdByName: "This device",
+          input,
+          output,
+          local: true,
+        };
+        setPlan(localPlan);
+        await outboxAdd({
+          id: localPlan.id,
+          incidentId: id,
+          module,
+          input,
+          environment: environment ?? context.environment,
+          createdAt: localPlan.createdAt,
+        });
+        await auth.refreshOutbox();
+      }
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 0) {
+        try {
+          const output = runOnDevice(module, input!, { ...context, environment: environment ?? context.environment }) as Record<
+            string,
+            unknown
+          >;
+          setPlan({
+            id: `local-${Date.now()}`,
+            module,
+            version: 0,
+            createdAt: new Date().toISOString(),
+            createdByName: "This device",
+            input: input!,
+            output,
+            local: true,
+          });
+          setError("The link dropped. The plan was run on this device.");
+        } catch (localError) {
+          setError(localError instanceof Error ? localError.message : "The plan could not be run.");
+        }
+      } else {
+        setError(reason instanceof Error ? reason.message : "The plan could not be run.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!detail || !cordon || !land || !marine || !order) {
+    return (
+      <div className="page">
+        <p>{error || "Opening the incident"}</p>
+        <Link to="/">Back to incidents</Link>
+      </div>
+    );
+  }
+
+  const allowed = detail.can.plan[module];
+  return (
+    <div className="workspace">
+      <div className="map-wrap">
+        <div className="map-toolbar">
+          <div>
+            <p className="eyebrow">{detail.incident.reference}</p>
+            <h1>{detail.incident.title}</h1>
+          </div>
+          <div className="map-toolbar-actions">
+            <span className={`classmark ${detail.incident.classification}`}>{CLASS_LABEL[detail.incident.classification]}</span>
+            <button type="button" className={mapMode === "terrain" ? "text-button on" : "text-button"} onClick={() => setMapMode((value) => (value === "flat" ? "terrain" : "flat"))}>
+              {mapMode === "terrain" ? "Flat map" : "3D terrain"}
+            </button>
+            <button type="button" className={showPeople ? "text-button on" : "text-button"} onClick={() => setShowPeople((value) => !value)}>
+              Units
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              disabled={!showPeople}
+              onClick={() => setPresenceScope((value) => (value === "incident" ? "agency" : "incident"))}
+            >
+              {presenceScope === "incident" ? "This incident" : "Whole agency"}
+            </button>
+            <button type="button" className={showLights ? "text-button on" : "text-button"} onClick={() => setShowLights((value) => !value)}>
+              Street lights
+            </button>
+            <button type="button" className={tiles ? "text-button" : "text-button on"} onClick={() => setTiles((value) => !value)}>
+              {tiles ? "Grid only" : "Show map"}
+            </button>
+          </div>
+        </div>
+        {mapMode === "flat" ? (
+          <OperationMap
+            center={center}
+            zoom={module === "marine_sar" ? 11 : module === "land_sar" ? 13 : 15}
+            frame={frame}
+            tiles={tiles && auth.link}
+            tileUrl={tileUrl}
+            attribution="© OpenStreetMap"
+            markers={graphics.markers}
+            circles={graphics.circles}
+            polygons={graphics.polygons}
+            lines={graphics.lines}
+            heat={graphics.heat}
+            onClick={onMapClick}
+          />
+        ) : (
+          <Map3D enabled center={center} markers={graphics.markers} polygons={graphics.polygons} />
+        )}
+        <p className="map-note">
+          {mapMode === "terrain"
+            ? "3D terrain uses elevation tiles for the viewed area. Use it to judge height and vantage. Circle with pitch and bearing controls."
+            : tiles
+              ? "Tiles show the ground only. Switch to grid if the area being viewed must not be requested."
+              : "Grid only. No new map tiles are being requested."}
+          {showPeople ? ` Live units: ${presenceScope === "incident" ? "this incident" : "agency"} (private units stay hidden from the wider organisation).` : ""}
+        </p>
+      </div>
+      <aside className="panel">
+        <div className="tabs" role="tablist">
+          {MODULES.map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={module === item}
+              className={module === item ? "on" : ""}
+              onClick={() => {
+                setModule(item);
+                const latest = detail.plans.find((entry) => entry.module === item);
+                setPlan(latest ?? null);
+                setFrame((value) => value + 1);
+              }}
+            >
+              {item === "record" ? "Record" : KIND_LABEL[item]}
+            </button>
+          ))}
+        </div>
+        {error && <p className="form-error">{error}</p>}
+        {module === "record" ? (
+          <RecordPane detail={detail} onChange={setDetail} />
+        ) : (
+          <div className="plan-pane">
+            <p className="model-line">On-device model · case text stays in this installation</p>
+            {module === "cordon" && (
+              <CordonFields
+                form={cordon}
+                setForm={setCordon}
+                disabled={!allowed}
+                plan={plan && plan.module === "cordon" ? plan : null}
+                onTraining={() => {
+                  setCordon({
+                    ...cordon,
+                    subject: { lat: -36.8297, lng: 174.7964 },
+                    structure: "commercial",
+                    risk: "unknown",
+                    escapeRadiusM: "500",
+                    footprint: [],
+                    footprintClosed: true,
+                  });
+                  setFrame((value) => value + 1);
+                }}
+              />
+            )}
+            {module === "containment" && (
+              <div className="stack">
+                <p className="hint">
+                  Click the corners of the area to seal. {polygon.length} corner{polygon.length === 1 ? "" : "s"}
+                  {polygonClosed ? ", closed." : "."}
+                </p>
+                <div className="row-actions">
+                  <button type="button" className="text-button" onClick={() => setPolygon((current) => current.slice(0, -1))} disabled={!polygon.length}>
+                    Undo
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setPolygon([]);
+                      setPolygonClosed(false);
+                    }}
+                  >
+                    Clear
+                  </button>
+                  <button type="button" className="text-button" onClick={() => setPolygonClosed(true)} disabled={polygon.length < 3}>
+                    Close area
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setPolygon(TRAINING_AREA);
+                      setPolygonClosed(true);
+                      setFrame((value) => value + 1);
+                    }}
+                  >
+                    Training area
+                  </button>
+                </div>
+              </div>
+            )}
+            {module === "land_sar" && <LandFields form={land} setForm={setLand} disabled={!allowed} />}
+            {module === "marine_sar" && <MarineFields form={marine} setForm={setMarine} disabled={!allowed} />}
+            {module === "public_order" && (
+              <PublicOrderFields
+                form={order}
+                setForm={setOrder}
+                disabled={!allowed}
+                onTraining={() => {
+                  setOrder({
+                    ...order,
+                    mode: "endpoints",
+                    start: TRAINING_ORDER_START,
+                    end: TRAINING_ORDER_END,
+                    drawn: [],
+                    placing: "end",
+                    opposing: null,
+                  });
+                  setFrame((value) => value + 1);
+                }}
+              />
+            )}
+            {allowed && module !== "record" && (
+              <button
+                type="button"
+                className="primary"
+                disabled={
+                  busy ||
+                  (module === "containment" && polygon.length < 3) ||
+                  (module === "public_order" &&
+                    !(order.mode === "draw" ? order.drawn.length >= 2 : Boolean(order.start && order.end)))
+                }
+                onClick={() => void build()}
+              >
+                {busy ? "Running the model…" : auth.online ? "Build plan" : "Build on this device"}
+              </button>
+            )}
+            {!allowed && <p className="hint">Your role can read this module. It cannot run a new plan.</p>}
+            {plan && plan.module === module && <Briefing plan={plan} />}
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function CordonFields({
+  form,
+  setForm,
+  disabled,
+  onTraining,
+  plan,
+}: {
+  form: CordonForm;
+  setForm: (form: CordonForm) => void;
+  disabled: boolean;
+  onTraining: () => void;
+  plan: PlanRecord | null;
+}) {
+  const posts = ((plan?.output as { posts?: { id: string; kind: string; label: string; position: LatLng; side?: string; sectorBearing?: number; rationale: string; locked?: boolean }[] } | null)?.posts ?? []);
+  return (
+    <div className="stack">
+      <p className="hint">
+        Click the map for the scene footprint corners, then close it. After that, clicks move the subject. The model surrounds the scene on four sides, blocks the fewest streets that seal escape, and lists parks, alleys, and walkways to search.
+      </p>
+      <div className="row-actions">
+        <button
+          type="button"
+          className={form.footprintClosed && !form.footprint.length ? "text-button" : "text-button on"}
+          disabled={disabled}
+          onClick={() => setForm({ ...form, footprint: [], footprintClosed: false })}
+        >
+          Draw footprint
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          disabled={disabled || !form.footprint.length}
+          onClick={() => setForm({ ...form, footprint: form.footprint.slice(0, -1), footprintClosed: false })}
+        >
+          Undo corner
+        </button>
+        <button type="button" className="text-button" disabled={disabled} onClick={() => setForm({ ...form, footprint: [], footprintClosed: true })}>
+          Clear footprint
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          disabled={disabled || form.footprint.length < 3}
+          onClick={() => setForm({ ...form, footprintClosed: true })}
+        >
+          Close footprint
+        </button>
+      </div>
+      <p className="hint">
+        {form.footprintClosed
+          ? form.footprint.length
+            ? "Footprint closed. Clicks move the subject."
+            : "Clicks move the subject. Draw a footprint if the structure outline matters, or leave it empty and the model will estimate from the structure type."
+          : `${form.footprint.length} corner${form.footprint.length === 1 ? "" : "s"} — click the map to add more, then close.`}
+      </p>
+      <div className="split">
+        <label>
+          Structure
+          <select disabled={disabled} value={form.structure} onChange={(event) => setForm({ ...form, structure: event.target.value })}>
+            <option value="detached">Detached building</option>
+            <option value="commercial">Commercial</option>
+            <option value="multi_storey">Multi-storey</option>
+            <option value="open_ground">Open ground</option>
+          </select>
+        </label>
+        <label>
+          Escape sector m
+          <input
+            disabled={disabled}
+            value={form.escapeRadiusM}
+            placeholder="Model"
+            onChange={(event) => setForm({ ...form, escapeRadiusM: event.target.value })}
+          />
+        </label>
+      </div>
+      <label>
+        Reported risk
+        <select disabled={disabled} value={form.risk} onChange={(event) => setForm({ ...form, risk: event.target.value })}>
+          <option value="unknown">Unknown</option>
+          <option value="unarmed">Unarmed</option>
+          <option value="edged">Edged weapon</option>
+          <option value="firearm">Firearm</option>
+        </select>
+      </label>
+      {posts.length > 0 && (
+        <div className="stack">
+          <h3>Posts</h3>
+          <p className="hint">Lock a post after you have committed it on the ground. A rebuild keeps locked posts.</p>
+          <ul className="plain">
+            {posts.map((post) => {
+              const locked = form.lockedPosts.some((item) => item.id === post.id);
+              return (
+                <li key={post.id}>
+                  <span>
+                    <strong>{post.id}</strong>
+                    <small>{post.kind}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className={locked ? "text-button on" : "text-button"}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (locked) {
+                        setForm({ ...form, lockedPosts: form.lockedPosts.filter((item) => item.id !== post.id) });
+                      } else {
+                        setForm({
+                          ...form,
+                          lockedPosts: [
+                            ...form.lockedPosts.filter((item) => item.id !== post.id),
+                            {
+                              id: post.id,
+                              kind: post.kind as LockedPost["kind"],
+                              position: post.position,
+                              label: post.label,
+                              side: post.side as LockedPost["side"],
+                              locked: true,
+                              sectorBearing: post.sectorBearing,
+                              rationale: post.rationale,
+                            },
+                          ],
+                        });
+                      }
+                    }}
+                  >
+                    {locked ? "Locked" : "Lock"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      <button type="button" className="text-button" onClick={onTraining}>
+        Training subject
+      </button>
+    </div>
+  );
+}
+
+function LandFields({ form, setForm, disabled }: { form: LandForm; setForm: (form: LandForm) => void; disabled: boolean }) {
+  return (
+    <div className="stack">
+      <p className="hint">Click the map for the last known point. The ring uses time, mobility, terrain, and least-effort behaviour.</p>
+      <label>
+        Category
+        <select disabled={disabled} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value as SubjectCategory })}>
+          {CATEGORY_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="split">
+        <label>
+          Age
+          <input disabled={disabled} value={form.ageYears} onChange={(event) => setForm({ ...form, ageYears: event.target.value })} />
+        </label>
+        <label>
+          Hours missing
+          <input disabled={disabled} value={form.hoursMissing} onChange={(event) => setForm({ ...form, hoursMissing: event.target.value })} />
+        </label>
+      </div>
+      <button
+        type="button"
+        className="text-button"
+        disabled={disabled}
+        onClick={() =>
+          setForm({
+            ...form,
+            category: suggestCategory(form.ageYears ? Number(form.ageYears) : undefined, form.mentalState as "unknown"),
+          })
+        }
+      >
+        Suggest category from age and state
+      </button>
+      <div className="split">
+        <label>
+          Mental state
+          <select disabled={disabled} value={form.mentalState} onChange={(event) => setForm({ ...form, mentalState: event.target.value })}>
+            {["unknown", "calm", "confused", "panicked", "despondent", "intoxicated", "evasive"].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Knows the area
+          <select disabled={disabled} value={form.areaKnowledge} onChange={(event) => setForm({ ...form, areaKnowledge: event.target.value })}>
+            <option value="none">No</option>
+            <option value="some">Some</option>
+            <option value="local">Local</option>
+          </select>
+        </label>
+      </div>
+      <div className="split">
+        <label>
+          Mobility
+          <select disabled={disabled} value={form.mobility} onChange={(event) => setForm({ ...form, mobility: event.target.value })}>
+            {["impaired", "limited", "average", "fit"].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Terrain
+          <select disabled={disabled} value={form.terrain} onChange={(event) => setForm({ ...form, terrain: event.target.value })}>
+            {["urban", "suburban", "rural", "steep", "dense", "coastal", "alpine"].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label>
+        Conditions
+        <select disabled={disabled} value={form.conditions} onChange={(event) => setForm({ ...form, conditions: event.target.value })}>
+          {["clear", "rain", "night", "storm", "heat", "cold", "snow"].map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="split">
+        <label>
+          Downslope °
+          <input disabled={disabled} value={form.downslopeBearing} placeholder="From elevation" onChange={(event) => setForm({ ...form, downslopeBearing: event.target.value })} />
+        </label>
+        <label>
+          Intended °
+          <input disabled={disabled} value={form.intendedBearing} placeholder="Optional" onChange={(event) => setForm({ ...form, intendedBearing: event.target.value })} />
+        </label>
+      </div>
+      <div className="checks">
+        {(["roads", "trails", "water", "coastline"] as const).map((feature) => (
+          <label key={feature} className="check">
+            <input
+              type="checkbox"
+              disabled={disabled}
+              checked={form.features[feature]}
+              onChange={(event) => setForm({ ...form, features: { ...form.features, [feature]: event.target.checked } })}
+            />
+            <span>{feature}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MarineFields({ form, setForm, disabled }: { form: MarineForm; setForm: (form: MarineForm) => void; disabled: boolean }) {
+  return (
+    <div className="stack">
+      <p className="hint">Click the map for the last known position. Leave wind blank on the link and the installation will sample it. Only the coordinates are requested.</p>
+      <label>
+        Vessel
+        <select disabled={disabled} value={form.vessel} onChange={(event) => setForm({ ...form, vessel: event.target.value as VesselKind })}>
+          {VESSEL_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="split">
+        <label>
+          Length m
+          <input disabled={disabled} value={form.lengthM} onChange={(event) => setForm({ ...form, lengthM: event.target.value })} />
+        </label>
+        <label>
+          Hours adrift
+          <input disabled={disabled} value={form.hoursMissing} onChange={(event) => setForm({ ...form, hoursMissing: event.target.value })} />
+        </label>
+      </div>
+      <label>
+        Position error nm
+        <input disabled={disabled} value={form.positionErrorNm} onChange={(event) => setForm({ ...form, positionErrorNm: event.target.value })} />
+      </label>
+      <div className="split">
+        <label>
+          Wind kn
+          <input disabled={disabled} value={form.windSpeedKn} placeholder="Sample" onChange={(event) => setForm({ ...form, windSpeedKn: event.target.value })} />
+        </label>
+        <label>
+          From °
+          <input disabled={disabled} value={form.windFromDeg} placeholder="Sample" onChange={(event) => setForm({ ...form, windFromDeg: event.target.value })} />
+        </label>
+      </div>
+      <div className="split">
+        <label>
+          Current kn
+          <input disabled={disabled} value={form.currentSpeedKn} placeholder="Sample" onChange={(event) => setForm({ ...form, currentSpeedKn: event.target.value })} />
+        </label>
+        <label>
+          Toward °
+          <input disabled={disabled} value={form.currentTowardDeg} placeholder="Sample" onChange={(event) => setForm({ ...form, currentTowardDeg: event.target.value })} />
+        </label>
+      </div>
+      <button
+        type="button"
+        className="text-button"
+        onClick={() => setForm({ ...form, lkp: { lat: -36.75, lng: 174.9 }, vessel: "cabin_cruiser", lengthM: "12", hoursMissing: "6" })}
+      >
+        Training position
+      </button>
+    </div>
+  );
+}
+
+function PublicOrderFields({
+  form,
+  setForm,
+  disabled,
+  onTraining,
+}: {
+  form: PublicOrderForm;
+  setForm: (form: PublicOrderForm) => void;
+  disabled: boolean;
+  onTraining: () => void;
+}) {
+  return (
+    <div className="stack">
+      <p className="hint">
+        Enter start and end, or draw the foot route. The model snaps onto streets, pedestrian malls, alleys, and paths, then places available resources to keep the march on route and protect nearby sites.
+      </p>
+      <div className="row-actions">
+        <button
+          type="button"
+          className={form.mode === "endpoints" ? "text-button on" : "text-button"}
+          disabled={disabled}
+          onClick={() => setForm({ ...form, mode: "endpoints", placing: "start", drawn: [] })}
+        >
+          Start / end
+        </button>
+        <button
+          type="button"
+          className={form.mode === "draw" ? "text-button on" : "text-button"}
+          disabled={disabled}
+          onClick={() => setForm({ ...form, mode: "draw", placing: "draw" })}
+        >
+          Draw route
+        </button>
+        <button type="button" className={form.placing === "opposing" ? "text-button on" : "text-button"} disabled={disabled} onClick={() => setForm({ ...form, placing: "opposing" })}>
+          Opposing assembly
+        </button>
+      </div>
+      {form.mode === "endpoints" ? (
+        <div className="row-actions">
+          <button type="button" className={form.placing === "start" ? "text-button on" : "text-button"} disabled={disabled} onClick={() => setForm({ ...form, placing: "start" })}>
+            Set start{form.start ? " ✓" : ""}
+          </button>
+          <button type="button" className={form.placing === "end" ? "text-button on" : "text-button"} disabled={disabled} onClick={() => setForm({ ...form, placing: "end" })}>
+            Set end{form.end ? " ✓" : ""}
+          </button>
+        </div>
+      ) : (
+        <div className="row-actions">
+          <button type="button" className="text-button" disabled={disabled || !form.drawn.length} onClick={() => setForm({ ...form, drawn: form.drawn.slice(0, -1) })}>
+            Undo point
+          </button>
+          <button type="button" className="text-button" disabled={disabled} onClick={() => setForm({ ...form, drawn: [] })}>
+            Clear route
+          </button>
+          <span className="hint">{form.drawn.length} point{form.drawn.length === 1 ? "" : "s"}</span>
+        </div>
+      )}
+      {form.opposing && (
+        <button type="button" className="text-button" disabled={disabled} onClick={() => setForm({ ...form, opposing: null, placing: form.mode === "draw" ? "draw" : "end" })}>
+          Clear opposing assembly
+        </button>
+      )}
+      <div className="split">
+        <label>
+          Serials
+          <input disabled={disabled} value={form.serials} onChange={(event) => setForm({ ...form, serials: event.target.value })} />
+        </label>
+        <label>
+          Traffic
+          <input disabled={disabled} value={form.traffic} onChange={(event) => setForm({ ...form, traffic: event.target.value })} />
+        </label>
+      </div>
+      <div className="split">
+        <label>
+          Protection
+          <input disabled={disabled} value={form.protection} onChange={(event) => setForm({ ...form, protection: event.target.value })} />
+        </label>
+        <label>
+          Mobile
+          <input disabled={disabled} value={form.mobile} onChange={(event) => setForm({ ...form, mobile: event.target.value })} />
+        </label>
+      </div>
+      <label>
+        Corridor m
+        <input disabled={disabled} value={form.corridorM} placeholder="45" onChange={(event) => setForm({ ...form, corridorM: event.target.value })} />
+      </label>
+      <button type="button" className="text-button" onClick={onTraining}>
+        Training march
+      </button>
+    </div>
+  );
+}
+
+function Briefing({ plan }: { plan: PlanRecord }) {
+  const output = plan.output as {
+    narrative?: string[];
+    actions?: string[];
+    posts?: { id: string; label: string; rationale: string }[];
+    closures?: { id: string; roadName: string; seals: number; rationale: string }[];
+    searchTasks?: { id: string; kind: string; name: string; rationale: string }[];
+    wedges?: { id: string; priority: number; fromBearing: number; toBearing: number }[];
+    radius50M?: number;
+    radius95M?: number;
+    datum?: { lat: number; lng: number };
+    areaNm2?: number;
+    pattern?: string;
+    sweepNm?: number;
+    modifiers?: { label: string; effect: string }[];
+    riskNote?: string;
+    closureCount?: number;
+    exitCorridors?: number;
+    minimumGuaranteed?: boolean;
+    standoffM?: number;
+    escapeRadiusM?: number;
+    routeLengthM?: number;
+    snapped?: boolean;
+    resourcesUsed?: { serials: number; traffic: number; protection: number; mobile: number };
+    protectedNearRoute?: { site: { name: string; kind: string }; distanceM: number }[];
+  };
+  return (
+    <article className="briefing">
+      <p className="eyebrow">{plan.local ? "On this device" : `Version ${plan.version}`} · {formatWhen(plan.createdAt)}</p>
+      <h2>Briefing</h2>
+      <p className="disclaimer">Planning aid. It does not authorise a tactic, and it does not replace the incident commander.</p>
+      {output.riskNote && <p>{output.riskNote}</p>}
+      {output.standoffM != null && (
+        <p className="stat">
+          Scene standoff <strong>{output.standoffM} m</strong> · escape sector <strong>{output.escapeRadiusM} m</strong> ·{" "}
+          <strong>{output.closures?.length ?? 0}</strong> street block{(output.closures?.length ?? 0) === 1 ? "" : "s"} ·{" "}
+          <strong>{output.searchTasks?.length ?? 0}</strong> search task{(output.searchTasks?.length ?? 0) === 1 ? "" : "s"}
+        </p>
+      )}
+      {output.routeLengthM != null && (
+        <p className="stat">
+          Route <strong>{formatKm(output.routeLengthM)}</strong>
+          {output.snapped ? ", snapped to the foot network" : ""} · <strong>{output.posts?.length ?? 0}</strong> resource post
+          {(output.posts?.length ?? 0) === 1 ? "" : "s"}
+          {output.resourcesUsed
+            ? ` · used ${output.resourcesUsed.serials} serial / ${output.resourcesUsed.traffic} traffic / ${output.resourcesUsed.protection} protect / ${output.resourcesUsed.mobile} mobile`
+            : ""}
+        </p>
+      )}
+      {output.closureCount != null && (
+        <p className="stat">
+          <strong>{output.closureCount}</strong> closure sites for <strong>{output.exitCorridors}</strong> exit corridors
+          {output.minimumGuaranteed ? ", seal proved on the loaded roads." : "."}
+        </p>
+      )}
+      {output.radius95M != null && (
+        <p className="stat">
+          50% ring {formatKm(output.radius50M || 0)} · 95% ring {formatKm(output.radius95M)}
+        </p>
+      )}
+      {output.areaNm2 != null && output.datum && (
+        <p className="stat">
+          Datum {coord(output.datum.lat, output.datum.lng)} · {formatNm(Math.sqrt(output.areaNm2))} scale · {output.areaNm2.toFixed(1)} nm²
+        </p>
+      )}
+      <ul>
+        {(output.narrative ?? []).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {output.posts && (
+        <ol>
+          {output.posts.map((post) => (
+            <li key={post.id}>
+              <strong>{post.label}</strong> {post.rationale}
+            </li>
+          ))}
+        </ol>
+      )}
+      {output.searchTasks && output.searchTasks.length > 0 && (
+        <>
+          <h3>Search tasks</h3>
+          <ol>
+            {output.searchTasks.map((task) => (
+              <li key={task.id}>
+                <strong>
+                  {task.name} ({task.kind})
+                </strong>{" "}
+                {task.rationale}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      {output.closures && plan.module === "containment" && (
+        <ol>
+          {output.closures.map((site) => (
+            <li key={site.id}>
+              <strong>
+                {site.id} {site.roadName}
+              </strong>{" "}
+              {site.rationale}
+            </li>
+          ))}
+        </ol>
+      )}
+      {output.wedges && (
+        <ol>
+          {output.wedges.slice(0, 4).map((wedge) => (
+            <li key={wedge.id}>
+              Priority {wedge.priority}: {wedge.fromBearing}°–{wedge.toBearing}°
+            </li>
+          ))}
+        </ol>
+      )}
+      {output.modifiers && (
+        <ul className="modifiers">
+          {output.modifiers.map((item) => (
+            <li key={item.label}>
+              <strong>{item.label}.</strong> {item.effect}
+            </li>
+          ))}
+        </ul>
+      )}
+      {output.actions && (
+        <>
+          <h3>First tasks</h3>
+          <ol>
+            {output.actions.map((action) => (
+              <li key={action}>{action}</li>
+            ))}
+          </ol>
+        </>
+      )}
+      <p className="hint">
+        {plan.createdByName}
+        {output.pattern ? ` · pattern ${output.pattern.replaceAll("_", " ")}` : ""}
+        {output.sweepNm ? ` · sweep start ${output.sweepNm.toFixed(2)} nm` : ""}
+      </p>
+      <button type="button" className="text-button" onClick={() => window.print()}>
+        Print briefing
+      </button>
+    </article>
+  );
+}
+
+function RecordPane({ detail, onChange }: { detail: IncidentDetail; onChange: (detail: IncidentDetail) => void }) {
+  const auth = useAuth();
+  const [status, setStatus] = useState(detail.incident.status);
+  const [summary, setSummary] = useState(detail.incident.summary || "");
+  const [message, setMessage] = useState("");
+  const [agencies, setAgencies] = useState<{ id: string; name: string }[]>([]);
+  const [grantAgency, setGrantAgency] = useState("");
+  const [grantLevel, setGrantLevel] = useState("view");
+  const [memberId, setMemberId] = useState("");
+
+  useEffect(() => {
+    if (!detail.can.update || !auth.online) return;
+    api<{ agencies: { id: string; name: string }[] }>("/api/agencies")
+      .then((data) => setAgencies(data.agencies.filter((agency) => agency.id !== detail.incident.agencyId)))
+      .catch(() => undefined);
+  }, [detail.can.update, detail.incident.agencyId, auth.online]);
+
+  async function save() {
+    const next = await api<IncidentDetail>(`/api/incidents/${detail.incident.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, summary }),
+    });
+    onChange(next);
+    setMessage("Record updated.");
+  }
+
+  async function addMember() {
+    if (!memberId) return;
+    await api(`/api/incidents/${detail.incident.id}/members`, {
+      method: "POST",
+      body: JSON.stringify({ userId: memberId }),
+    });
+    onChange(await api<IncidentDetail>(`/api/incidents/${detail.incident.id}`));
+  }
+
+  async function share() {
+    if (!grantAgency) return;
+    await api(`/api/incidents/${detail.incident.id}/grants`, {
+      method: "POST",
+      body: JSON.stringify({ agencyId: grantAgency, permission: grantLevel }),
+    });
+    onChange(await api<IncidentDetail>(`/api/incidents/${detail.incident.id}`));
+  }
+
+  return (
+    <div className="stack">
+      <p>
+        {detail.incident.agencyName} · {KIND_LABEL[detail.incident.kind]} · {coord(detail.incident.lat, detail.incident.lng)}
+      </p>
+      <p>{detail.incident.locationLabel}</p>
+      {detail.can.update && auth.online ? (
+        <>
+          <label>
+            Status
+            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+              {Object.entries(STATUS_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Summary
+            <textarea value={summary} rows={5} onChange={(event) => setSummary(event.target.value)} />
+          </label>
+          <button type="button" className="primary" onClick={() => void save().catch((reason) => setMessage(reason.message))}>
+            Save record
+          </button>
+        </>
+      ) : (
+        <p>{detail.incident.summary}</p>
+      )}
+      <h3>On this incident</h3>
+      <ul>
+        {detail.members.map((member) => (
+          <li key={member.userId}>
+            {member.displayName} · {member.appointment} · {member.duty}
+          </li>
+        ))}
+      </ul>
+      {detail.can.update && auth.online && (
+        <div className="row-actions">
+          <select value={memberId} onChange={(event) => setMemberId(event.target.value)}>
+            <option value="">Add a person</option>
+            {detail.directory.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.displayName}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="text-button" onClick={() => void addMember().catch((reason) => setMessage(reason.message))}>
+            Add
+          </button>
+        </div>
+      )}
+      <h3>Shared with</h3>
+      <ul>
+        {detail.grants.map((grant) => (
+          <li key={grant.id}>
+            {grant.agencyName} · {grant.permission}
+          </li>
+        ))}
+        {!detail.grants.length && <li>Not shared.</li>}
+      </ul>
+      {detail.can.update && auth.online && (
+        <div className="row-actions">
+          <select value={grantAgency} onChange={(event) => setGrantAgency(event.target.value)}>
+            <option value="">Agency</option>
+            {agencies.map((agency) => (
+              <option key={agency.id} value={agency.id}>
+                {agency.name}
+              </option>
+            ))}
+          </select>
+          <select value={grantLevel} onChange={(event) => setGrantLevel(event.target.value)}>
+            <option value="view">View</option>
+            <option value="plan">Plan</option>
+          </select>
+          <button type="button" className="text-button" onClick={() => void share().catch((reason) => setMessage(reason.message))}>
+            Share
+          </button>
+        </div>
+      )}
+      <h3>Plan history</h3>
+      <ul>
+        {detail.plans.map((item) => (
+          <li key={item.id}>
+            {KIND_LABEL[item.module] || item.module} v{item.version} · {formatWhen(item.createdAt)} · {item.createdByName}
+          </li>
+        ))}
+        {!detail.plans.length && <li>No plans yet.</li>}
+      </ul>
+      {message && <p className="hint">{message}</p>}
+    </div>
+  );
+}
+
+function inputFor(
+  module: string,
+  cordon: CordonForm | null,
+  land: LandForm | null,
+  marine: MarineForm | null,
+  order: PublicOrderForm | null,
+  polygon: LatLng[],
+): Record<string, unknown> | null {
+  if (module === "cordon" && cordon) {
+    return {
+      subject: cordon.subject,
+      structure: cordon.structure,
+      risk: cordon.risk,
+      escapeRadiusM: cordon.escapeRadiusM ? Number(cordon.escapeRadiusM) : undefined,
+      footprint: cordon.footprintClosed && cordon.footprint.length >= 3 ? cordon.footprint : undefined,
+      lockedPosts: cordon.lockedPosts,
+    };
+  }
+  if (module === "containment") return polygon.length >= 3 ? { polygon } : null;
+  if (module === "land_sar" && land) {
+    return {
+      ...land,
+      ageYears: land.ageYears ? Number(land.ageYears) : undefined,
+      hoursMissing: Number(land.hoursMissing),
+      downslopeBearing: land.downslopeBearing ? Number(land.downslopeBearing) : undefined,
+      intendedBearing: land.intendedBearing ? Number(land.intendedBearing) : undefined,
+    };
+  }
+  if (module === "marine_sar" && marine) {
+    return {
+      lkp: marine.lkp,
+      hoursMissing: Number(marine.hoursMissing),
+      vessel: marine.vessel,
+      lengthM: marine.lengthM ? Number(marine.lengthM) : undefined,
+      positionErrorNm: marine.positionErrorNm ? Number(marine.positionErrorNm) : undefined,
+    };
+  }
+  if (module === "public_order" && order) {
+    if (order.mode === "draw") {
+      if (order.drawn.length < 2) return null;
+      return {
+        drawn: order.drawn,
+        resources: {
+          serials: Number(order.serials || 0),
+          traffic: Number(order.traffic || 0),
+          protection: Number(order.protection || 0),
+          mobile: Number(order.mobile || 0),
+        },
+        corridorM: order.corridorM ? Number(order.corridorM) : undefined,
+        opposingAssembly: order.opposing || undefined,
+      };
+    }
+    if (!order.start || !order.end) return null;
+    return {
+      start: order.start,
+      end: order.end,
+      resources: {
+        serials: Number(order.serials || 0),
+        traffic: Number(order.traffic || 0),
+        protection: Number(order.protection || 0),
+        mobile: Number(order.mobile || 0),
+      },
+      corridorM: order.corridorM ? Number(order.corridorM) : undefined,
+      opposingAssembly: order.opposing || undefined,
+    };
+  }
+  return null;
+}
+
+function marineEnvironment(form: MarineForm | null) {
+  if (!form || form.windSpeedKn === "" || form.windFromDeg === "") return undefined;
+  return {
+    windSpeedKn: Number(form.windSpeedKn),
+    windFromDeg: Number(form.windFromDeg),
+    currentSpeedKn: form.currentSpeedKn === "" ? 0 : Number(form.currentSpeedKn),
+    currentTowardDeg: form.currentTowardDeg === "" ? 0 : Number(form.currentTowardDeg),
+    source: "manual" as const,
+  };
+}
+
+function stripEmpty(context: DeviceContext): DeviceContext {
+  return {
+    ways: context.ways?.length ? context.ways : undefined,
+    paths: context.paths?.length ? context.paths : undefined,
+    parks: context.parks?.length ? context.parks : undefined,
+    lights: context.lights?.length ? context.lights : undefined,
+    sites: context.sites?.length ? context.sites : undefined,
+    elevation: context.elevation?.length ? context.elevation : undefined,
+    environment: context.environment,
+  };
+}
+
+function graphicsFor(
+  module: string,
+  plan: PlanRecord | null,
+  cordon: CordonForm | null,
+  land: LandForm | null,
+  marine: MarineForm | null,
+  order: PublicOrderForm | null,
+  polygon: LatLng[],
+  polygonClosed: boolean,
+) {
+  const markers: MapMarker[] = [];
+  const circles: { id: string; center: LatLng; radiusM: number; tone: string }[] = [];
+  const polygons: { id: string; points: LatLng[]; tone: string; fill: boolean }[] = [];
+  const lines: { id: string; points: LatLng[]; tone: string }[] = [];
+  let heat: { lat: number; lng: number; w: number }[] | undefined;
+  const output = plan && plan.module === module ? plan.output : null;
+
+  if (module === "cordon" && cordon) {
+    markers.push({ id: "subject", ...cordon.subject, label: "SUBJ", tone: "subject", detail: "Subject" });
+    if (cordon.footprint.length) {
+      polygons.push({ id: "footprint", points: cordon.footprint, tone: "inner", fill: cordon.footprintClosed });
+    }
+  }
+  if (module === "land_sar" && land) markers.push({ id: "lkp", ...land.lkp, label: "LKP", tone: "subject", detail: "Last known point" });
+  if (module === "marine_sar" && marine) markers.push({ id: "lkp", ...marine.lkp, label: "LKP", tone: "subject", detail: "Last known position" });
+  if (module === "public_order" && order) {
+    if (order.start) markers.push({ id: "start", ...order.start, label: "START", tone: "subject", detail: "March start" });
+    if (order.end) markers.push({ id: "end", ...order.end, label: "END", tone: "datum", detail: "March finish" });
+    if (order.opposing) markers.push({ id: "opp", ...order.opposing, label: "OPP", tone: "outer", detail: "Opposing assembly" });
+    if (order.drawn.length >= 2) lines.push({ id: "drawn", points: order.drawn, tone: "tick" });
+  }
+  if (module === "containment" && polygon.length) {
+    polygons.push({ id: "area", points: polygon, tone: "area", fill: polygonClosed });
+  }
+
+  const cordonOut = output as {
+    posts?: { id: string; kind: string; label: string; position: LatLng; rationale: string }[];
+    footprint?: LatLng[];
+    escapePolygon?: LatLng[];
+    searchTasks?: { id: string; points: LatLng[]; kind: string }[];
+  } | null;
+  if (cordonOut?.footprint?.length) polygons.push({ id: "plan-footprint", points: cordonOut.footprint, tone: "inner", fill: true });
+  if (cordonOut?.escapePolygon?.length) polygons.push({ id: "escape", points: cordonOut.escapePolygon, tone: "outer", fill: false });
+  for (const task of cordonOut?.searchTasks ?? []) {
+    if (task.points.length >= 2) lines.push({ id: task.id, points: task.points, tone: task.kind === "park" ? "search" : "tick" });
+  }
+  for (const post of cordonOut?.posts ?? []) {
+    const tone = post.kind === "escape" ? "closure" : post.kind === "scene" ? "inner" : post.kind === "search" ? "search" : post.kind;
+    markers.push({ id: post.id, ...post.position, label: post.id, tone, detail: post.rationale });
+  }
+
+  const seal = output as { closures?: { id: string; position: LatLng; roadName: string; rationale: string }[]; exits?: { position: LatLng; roadName: string }[] } | null;
+  for (const exit of seal?.exits ?? []) {
+    markers.push({ id: `exit-${exit.position.lat}`, ...exit.position, label: "EX", tone: "outer", detail: exit.roadName });
+  }
+  for (const site of seal?.closures ?? []) {
+    markers.push({ id: site.id, ...site.position, label: site.id, tone: "closure", detail: site.rationale });
+  }
+
+  const search = output as { radius50M?: number; radius75M?: number; radius95M?: number; cells?: { lat: number; lng: number; w: number }[] } | null;
+  if (land && search?.radius95M) {
+    circles.push({ id: "r50", center: land.lkp, radiusM: search.radius50M || 0, tone: "hot" });
+    circles.push({ id: "r95", center: land.lkp, radiusM: search.radius95M, tone: "search" });
+    heat = search.cells;
+  }
+
+  const sea = output as { datum?: LatLng; ellipse?: LatLng[]; fan?: LatLng[][] } | null;
+  if (sea?.datum) markers.push({ id: "datum", ...sea.datum, label: "DATUM", tone: "datum", detail: "Search datum" });
+  if (sea?.ellipse) polygons.push({ id: "ellipse", points: sea.ellipse, tone: "water", fill: true });
+  sea?.fan?.forEach((line, index) => lines.push({ id: `fan-${index}`, points: line, tone: index === 1 ? "drift" : "water" }));
+
+  const orderOut = output as {
+    route?: LatLng[];
+    posts?: { id: string; kind: string; position: LatLng; rationale: string }[];
+    protectedNearRoute?: { site: { id: string; name: string; kind: string; position: LatLng }; distanceM: number }[];
+  } | null;
+  if (module === "public_order" && orderOut?.route?.length) {
+    lines.push({ id: "protest-route", points: orderOut.route, tone: "drift" });
+  }
+  for (const post of orderOut?.posts ?? []) {
+    const tone =
+      post.kind === "protect"
+        ? "command"
+        : post.kind === "side_block"
+          ? "closure"
+          : post.kind === "clash_buffer"
+            ? "outer"
+            : post.kind === "reserve"
+              ? "rvp"
+              : "inner";
+    markers.push({ id: post.id, ...post.position, label: post.id, tone, detail: post.rationale });
+  }
+  for (const item of orderOut?.protectedNearRoute ?? []) {
+    markers.push({
+      id: `site-${item.site.id}`,
+      ...item.site.position,
+      label: "SITE",
+      tone: "command",
+      detail: `${item.site.name} (${item.site.kind.replaceAll("_", " ")})`,
+    });
+  }
+
+  return { markers, circles, polygons, lines, heat };
+}
