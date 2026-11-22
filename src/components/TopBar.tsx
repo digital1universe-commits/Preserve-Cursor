@@ -10,6 +10,8 @@ export function TopBar() {
   const setAirGapEnforced = usePreserveStore((s) => s.setAirGapEnforced);
   const mapPitch3d = usePreserveStore((s) => s.mapPitch3d);
   const setMapPitch3d = usePreserveStore((s) => s.setMapPitch3d);
+  const mapDarkMode = usePreserveStore((s) => s.mapDarkMode);
+  const setMapDarkMode = usePreserveStore((s) => s.setMapDarkMode);
   const showStreetLights = usePreserveStore((s) => s.showStreetLights);
   const setShowStreetLights = usePreserveStore((s) => s.setShowStreetLights);
   const resetDemoData = usePreserveStore((s) => s.resetDemoData);
@@ -56,6 +58,14 @@ export function TopBar() {
         </button>
         <button
           type="button"
+          className={`pill ${mapDarkMode ? 'active' : ''}`}
+          data-testid="toggle-map-dark"
+          onClick={() => setMapDarkMode(!mapDarkMode)}
+        >
+          Map {mapDarkMode ? 'dark' : 'light'}
+        </button>
+        <button
+          type="button"
           className={`pill ${mapPitch3d ? 'active' : ''}`}
           data-testid="toggle-3d"
           onClick={() => setMapPitch3d(!mapPitch3d)}
@@ -66,9 +76,10 @@ export function TopBar() {
           type="button"
           className={`pill ${showStreetLights ? 'active' : ''}`}
           data-testid="toggle-lights"
+          aria-pressed={showStreetLights}
           onClick={() => setShowStreetLights(!showStreetLights)}
         >
-          Street lights
+          Street lights {showStreetLights ? 'ON' : 'OFF'}
         </button>
         <button type="button" className="pill" onClick={() => resetDemoData()}>
           Reset seed

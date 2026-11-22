@@ -4,6 +4,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Incident, LatLng, StructureSide } from '../domain/types';
 import { STRUCTURE_SIDE_COLOURS } from '../domain/types';
 import { circlePolygon } from '../geo/qld';
+import { QLD } from '../geo/qld';
+import { mapStyleUrl } from '../map/styles';
 import { visibleTracks } from '../tracking/visibility';
 import { usePreserveStore } from '../store/preserveStore';
 import { DEMO_USERS } from '../auth/roles';
@@ -123,100 +125,159 @@ function buildOverlay(incident: Incident | null) {
   return { lines, polys, points };
 }
 
-function ensureSources(map: MapLibreMap) {
+export function ensureOverlayLayers(map: MapLibreMap) {
   const empty: GjCollection = { type: 'FeatureCollection', features: [] };
-  const add = (id: string, type: 'fill' | 'line' | 'circle' | 'symbol', paint: Record<string, unknown>, layout?: Record<string, unknown>) => {
+  const addSource = (id: string) => {
     if (!map.getSource(id)) {
       map.addSource(id, { type: 'geojson', data: empty });
     }
-    if (!map.getLayer(id)) {
-      map.addLayer({
-        id,
-        type,
-        source: id,
-        paint,
-        ...(layout ? { layout } : {}),
-      } as maplibregl.AddLayerObject);
+  };
+  const addLayer = (layer: maplibregl.AddLayerObject) => {
+    if (!map.getLayer(layer.id)) {
+      map.addLayer(layer);
     }
   };
 
-
-  add('preserve-polys', 'fill', {
-    'fill-color': [
-      'match',
-      ['get', 'ring'],
-      'inner',
-      '#c62828',
-      'middle',
-      '#d4a017',
-      'outer',
-      '#3d7ea6',
-      'high',
-      '#c62828',
-      'medium',
-      '#d4a017',
-      'low',
-      '#3d7ea6',
-      'search',
-      '#2e7d32',
-      'box',
-      '#6a1b9a',
-      '#3d7ea6',
-    ],
-    'fill-opacity': 0.18,
-  });
-  add('preserve-lines', 'line', {
-    'line-color': '#e8f0f6',
-    'line-width': 2.5,
-    'line-opacity': 0.85,
-  });
-  add('preserve-points', 'circle', {
-    'circle-radius': 6,
-    'circle-color': [
-      'match',
-      ['get', 'kind'],
-      'spike',
-      '#c62828',
-      'resource',
-      '#d4a017',
-      'sert',
-      '#111111',
-      'critical',
-      '#2e7d32',
-      '#e8f0f6',
-    ],
-    'circle-stroke-width': 1.5,
-    'circle-stroke-color': '#0b1520',
-  });
-  add(
+  for (const id of [
+    'preserve-polys',
+    'preserve-lines',
+    'preserve-points',
     'preserve-labels',
-    'symbol',
-    {
-      'text-color': '#e8f0f6',
-      'text-halo-color': '#0b1520',
-      'text-halo-width': 1.2,
+    'preserve-lights',
+    'preserve-lights-glow',
+    'preserve-structures',
+    'preserve-markings',
+  ]) {
+    addSource(id);
+  }
+
+  addLayer({
+    id: 'preserve-polys',
+    type: 'fill',
+    source: 'preserve-polys',
+    paint: {
+      'fill-color': [
+        'match',
+        ['get', 'ring'],
+        'inner',
+        '#c62828',
+        'middle',
+        '#d4a017',
+        'outer',
+        '#3d7ea6',
+        'high',
+        '#c62828',
+        'medium',
+        '#d4a017',
+        'low',
+        '#3d7ea6',
+        'search',
+        '#2e7d32',
+        'box',
+        '#6a1b9a',
+        '#3d7ea6',
+      ],
+      'fill-opacity': 0.18,
     },
-    {
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-lines',
+    type: 'line',
+    source: 'preserve-lines',
+    paint: {
+      'line-color': '#ffd54f',
+      'line-width': 4,
+      'line-opacity': 0.95,
+    },
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-points',
+    type: 'circle',
+    source: 'preserve-points',
+    paint: {
+      'circle-radius': 6,
+      'circle-color': [
+        'match',
+        ['get', 'kind'],
+        'spike',
+        '#c62828',
+        'resource',
+        '#d4a017',
+        'sert',
+        '#111111',
+        'critical',
+        '#2e7d32',
+        '#e8f0f6',
+      ],
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': '#0b1520',
+    },
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-labels',
+    type: 'symbol',
+    source: 'preserve-labels',
+    layout: {
       'text-field': ['get', 'label'],
       'text-size': 11,
       'text-offset': [0, 1.2],
     },
-  );
-  add('preserve-lights', 'circle', {
-    'circle-radius': ['match', ['get', 'type'], 'high_mast', 5, 3],
-    'circle-color': '#fff59d',
-    'circle-opacity': 0.75,
-  });
-  add('preserve-structures', 'circle', {
-    'circle-radius': 8,
-    'circle-color': ['get', 'colour'],
-    'circle-stroke-width': 2,
-    'circle-stroke-color': '#e8f0f6',
-  });
-  add('preserve-markings', 'circle', {
-    'circle-radius': 5,
-    'circle-color': '#81d4fa',
-  });
+    paint: {
+      'text-color': '#e8f0f6',
+      'text-halo-color': '#0b1520',
+      'text-halo-width': 1.2,
+    },
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-lights-glow',
+    type: 'circle',
+    source: 'preserve-lights',
+    paint: {
+      'circle-radius': ['match', ['get', 'type'], 'high_mast', 18, 12],
+      'circle-color': '#fff59d',
+      'circle-opacity': 0.25,
+      'circle-blur': 0.6,
+    },
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-lights',
+    type: 'circle',
+    source: 'preserve-lights',
+    paint: {
+      'circle-radius': ['match', ['get', 'type'], 'high_mast', 7, 5],
+      'circle-color': '#ffe082',
+      'circle-stroke-width': 1,
+      'circle-stroke-color': '#fffde7',
+      'circle-opacity': 0.95,
+    },
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-structures',
+    type: 'circle',
+    source: 'preserve-structures',
+    paint: {
+      'circle-radius': 8,
+      'circle-color': ['get', 'colour'],
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#e8f0f6',
+    },
+  } as maplibregl.AddLayerObject);
+
+  addLayer({
+    id: 'preserve-markings',
+    type: 'circle',
+    source: 'preserve-markings',
+    paint: {
+      'circle-radius': 5,
+      'circle-color': '#81d4fa',
+    },
+  } as maplibregl.AddLayerObject);
 }
 
 function setCollection(map: MapLibreMap, id: string, features: GjFeature[]) {
@@ -224,13 +285,24 @@ function setCollection(map: MapLibreMap, id: string, features: GjFeature[]) {
   src?.setData({ type: 'FeatureCollection', features });
 }
 
+function setLightsVisible(map: MapLibreMap, visible: boolean) {
+  const vis = visible ? 'visible' : 'none';
+  for (const id of ['preserve-lights', 'preserve-lights-glow']) {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, 'visibility', vis);
+    }
+  }
+}
+
 export function MapView() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const lastIncidentFlyRef = useRef<string | null>(null);
 
   const incidents = usePreserveStore((s) => s.incidents);
   const activeIncidentId = usePreserveStore((s) => s.activeIncidentId);
   const mapPitch3d = usePreserveStore((s) => s.mapPitch3d);
+  const mapDarkMode = usePreserveStore((s) => s.mapDarkMode);
   const showStreetLights = usePreserveStore((s) => s.showStreetLights);
   const streetLights = usePreserveStore((s) => s.streetLights);
   const tracks = usePreserveStore((s) => s.tracks);
@@ -250,20 +322,21 @@ export function MapView() {
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://tiles.openfreemap.org/styles/liberty',
+      style: mapStyleUrl(usePreserveStore.getState().mapDarkMode),
       center: [153.0251, -27.4698],
-      zoom: 12.5,
+      zoom: 13,
       pitch: 0,
       attributionControl: {},
     });
 
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 
-    map.on('load', () => {
-      ensureSources(map);
-      // Soft terrain-like pitch feel without remote DEM dependency.
-      map.easeTo({ pitch: 0, duration: 0 });
-    });
+    const onReady = () => {
+      ensureOverlayLayers(map);
+      setLightsVisible(map, usePreserveStore.getState().showStreetLights);
+    };
+    map.on('load', onReady);
+    map.on('style.load', onReady);
 
     map.on('click', (e) => {
       const state = usePreserveStore.getState();
@@ -295,15 +368,49 @@ export function MapView() {
     };
   }, [addMarking, addStructureLabel]);
 
+  // Dark / light basemap swap
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const url = mapStyleUrl(mapDarkMode);
+    map.setStyle(url);
+  }, [mapDarkMode]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     map.easeTo({ pitch: mapPitch3d ? 60 : 0, bearing: mapPitch3d ? 20 : 0, duration: 600 });
   }, [mapPitch3d]);
 
+  // Street lights overlay — independent of incident flyTo
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
+
+    const applyLights = () => {
+      ensureOverlayLayers(map);
+      const features = streetLights.map((l) =>
+        pointFeature(l.position, { type: l.type, label: l.type === 'high_mast' ? 'High mast' : 'Light' }),
+      );
+      setCollection(map, 'preserve-lights', features);
+      setLightsVisible(map, showStreetLights);
+      if (showStreetLights) {
+        map.easeTo({
+          center: [QLD.brisbaneCbd.lng, QLD.brisbaneCbd.lat],
+          zoom: Math.max(map.getZoom(), 14),
+          duration: 700,
+        });
+      }
+    };
+
+    if (map.isStyleLoaded()) applyLights();
+    else map.once('style.load', applyLights);
+  }, [showStreetLights, streetLights]);
+
+  // Incident overlays
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
 
     const overlay = buildOverlay(incident);
     const visTracks = visibleTracks(viewer, tracks).map((t) =>
@@ -327,41 +434,34 @@ export function MapView() {
         }),
       );
 
-    const lights = showStreetLights
-      ? streetLights.map((l) => pointFeature(l.position, { type: l.type, label: l.type }))
-      : [];
-
     const apply = () => {
-      ensureSources(map);
+      ensureOverlayLayers(map);
       setCollection(map, 'preserve-polys', overlay.polys);
       setCollection(map, 'preserve-lines', overlay.lines);
       setCollection(map, 'preserve-points', [...overlay.points, ...visTracks]);
       setCollection(map, 'preserve-labels', [...overlay.points, ...visTracks, ...incidentMarkings, ...structures]);
-      setCollection(map, 'preserve-lights', lights);
       setCollection(map, 'preserve-structures', structures);
       setCollection(map, 'preserve-markings', incidentMarkings);
+      // Re-assert lights after style rebuilds
+      const lights = usePreserveStore.getState().streetLights.map((l) =>
+        pointFeature(l.position, { type: l.type, label: l.type }),
+      );
+      setCollection(map, 'preserve-lights', lights);
+      setLightsVisible(map, usePreserveStore.getState().showStreetLights);
     };
 
     if (map.isStyleLoaded()) apply();
-    else map.once('load', apply);
+    else map.once('style.load', apply);
 
-    if (incident) {
+    if (incident && lastIncidentFlyRef.current !== incident.id) {
+      lastIncidentFlyRef.current = incident.id;
       map.flyTo({
         center: [incident.location.lng, incident.location.lat],
-        zoom: incident.type === 'marine_sar' ? 10 : 13,
+        zoom: incident.type === 'marine_sar' ? 10 : 13.5,
         essential: true,
       });
     }
-  }, [
-    incident,
-    tracks,
-    viewer,
-    markings,
-    structureLabels,
-    activeIncidentId,
-    showStreetLights,
-    streetLights,
-  ]);
+  }, [incident, tracks, viewer, markings, structureLabels, activeIncidentId]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -370,7 +470,6 @@ export function MapView() {
         updateOwnTrack({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       },
       () => {
-        // Demo fallback near Brisbane if permission denied after consent gate
         updateOwnTrack({ lat: -27.47, lng: 153.03 });
       },
       { enableHighAccuracy: true, maximumAge: 5000 },
@@ -383,6 +482,9 @@ export function MapView() {
       <div ref={containerRef} className="map-root" data-testid="map-root" />
       <div className="map-overlay-tools">
         <span className="pill">{online ? 'Map online (asset allow-list)' : 'Offline — cached tiles only'}</span>
+        <span className="pill" data-testid="lights-status">
+          Lights {showStreetLights ? `ON (${streetLights.length})` : 'OFF'}
+        </span>
         <span className="pill">Click+Alt: annotate · Click+Shift: structure side</span>
       </div>
     </div>

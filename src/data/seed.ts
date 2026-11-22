@@ -4,18 +4,40 @@ import { planLandSar } from '../engines/landSar';
 import { planMarineSar } from '../engines/marineSar';
 import { planPublicOrder } from '../engines/publicOrder';
 import { planRoadBlock } from '../engines/roadBlock';
-import { QLD, destinationPoint } from '../geo/qld';
+import { ROAD_NODES, ROAD_EDGES } from '../geo/brisbaneRoadGraph';
+import { QLD, destinationPoint, haversineM } from '../geo/qld';
 
-export const SEED_STREET_LIGHTS: StreetLight[] = Array.from({ length: 24 }, (_, i) => {
-  const bearing = (i * 37) % 360;
-  const dist = 80 + (i % 5) * 60;
-  const base = i % 2 === 0 ? QLD.brisbaneCbd : QLD.fortitudeValley;
-  return {
-    id: `sl-${i}`,
-    position: destinationPoint(base, bearing, dist),
-    type: i % 7 === 0 ? 'high_mast' : 'standard',
-  };
-});
+/** Dense street-light seed along CBD / Valley / South Bank road graph. */
+export const SEED_STREET_LIGHTS: StreetLight[] = (() => {
+  const lights: StreetLight[] = [];
+  let n = 0;
+  for (const e of ROAD_EDGES) {
+    const a = ROAD_NODES[e.a].position;
+    const b = ROAD_NODES[e.b].position;
+    const dist = haversineM(a, b);
+    const steps = Math.max(2, Math.ceil(dist / 70));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      lights.push({
+        id: `sl-${n++}`,
+        position: {
+          lat: a.lat + (b.lat - a.lat) * t,
+          lng: a.lng + (b.lng - a.lng) * t,
+        },
+        type: i % 5 === 0 ? 'high_mast' : 'standard',
+      });
+    }
+  }
+  // Extra cluster around Queen St mall for visibility
+  for (let i = 0; i < 12; i++) {
+    lights.push({
+      id: `sl-cbd-${i}`,
+      position: destinationPoint(QLD.brisbaneCbd, i * 30, 40 + (i % 3) * 25),
+      type: i % 4 === 0 ? 'high_mast' : 'standard',
+    });
+  }
+  return lights;
+})();
 
 export function buildSeedIncidents(): Incident[] {
   const cordonLoc = QLD.fortitudeValley;
@@ -113,7 +135,7 @@ export function buildSeedIncidents(): Incident[] {
     createdAtIso: new Date(Date.now() - 40 * 60_000).toISOString(),
     createdBy: 'u-comms',
     location: poLoc,
-    summary: 'City protest route South Bank → CBD → Valley.',
+    summary: 'City protest route South Bank → CBD → Valley via bridges/streets.',
     joinedUserIds: ['u-comms'],
     publicOrder: planPublicOrder([QLD.southBank, QLD.brisbaneCbd, QLD.parliamentHouse, QLD.fortitudeValley]),
   };
@@ -136,7 +158,6 @@ export function buildSeedIncidents(): Incident[] {
     },
   };
 
-  // Link the first to the second
   publicOrder.publicOrder = {
     ...publicOrder.publicOrder!,
     linkedOpposingIncidentId: 'seed-po-2',

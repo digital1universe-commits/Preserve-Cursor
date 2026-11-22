@@ -3,6 +3,7 @@ import { TopBar } from './components/TopBar';
 import { JobsPanel } from './components/JobsPanel';
 import { DetailPanel } from './components/DetailPanel';
 import { MapView } from './components/MapView';
+import { NewIncidentForm } from './components/NewIncidentForm';
 import { usePreserveStore } from './store/preserveStore';
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
       <JobsPanel />
       <MapView />
       <DetailPanel />
+      <NewIncidentForm />
     </div>
   );
 }

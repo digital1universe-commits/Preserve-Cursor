@@ -9,9 +9,8 @@ const NEW_TYPES: IncidentType[] = ['cordon', 'land_sar', 'marine_sar', 'public_o
 export function JobsPanel() {
   const incidents = usePreserveStore((s) => s.incidents);
   const activeIncidentId = usePreserveStore((s) => s.activeIncidentId);
-  const createIncident = usePreserveStore((s) => s.createIncident);
+  const openNewIncidentForm = usePreserveStore((s) => s.openNewIncidentForm);
   const selectIncident = usePreserveStore((s) => s.selectIncident);
-  const joinIncident = usePreserveStore((s) => s.joinIncident);
   const currentUserId = usePreserveStore((s) => s.currentUserId);
   const user = DEMO_USERS.find((u) => u.id === currentUserId) ?? DEMO_USERS[0];
   const canCreate = userHas(user, 'incident:create');
@@ -31,9 +30,8 @@ export function JobsPanel() {
                 className="btn"
                 data-testid={`new-${type}`}
                 onClick={() => {
-                  // HARD RULE: always creates a new incident — never opens existing.
-                  const created = createIncident({ type });
-                  joinIncident(created.id);
+                  // HARD RULE: opens a form that always creates a NEW incident — never an existing one.
+                  openNewIncidentForm(type);
                 }}
               >
                 New {INCIDENT_TYPE_LABELS[type]}

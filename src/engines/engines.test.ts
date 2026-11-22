@@ -63,8 +63,10 @@ describe('local engines', () => {
     expect(plan.briefing).toMatch(/MARINE SAR BRIEFING/);
   });
 
-  it('public order recommends critical-site protection and can link opposing', () => {
+  it('public order snaps to streets/bridges and recommends critical-site protection', () => {
     const plan = planPublicOrder([QLD.southBank, QLD.brisbaneCbd, QLD.parliamentHouse]);
+    expect(plan.route.length).toBeGreaterThan(3);
+    expect(plan.snappedFeatures.some((f) => /Bridge|Victoria|Queen|George|Ann/i.test(f))).toBe(true);
     expect(plan.policePositions.some((p) => /Parliament|containment/i.test(p.label))).toBe(true);
     const linked = linkOpposingPublicOrder(plan, 'other-po');
     expect(linked.linkedOpposingIncidentId).toBe('other-po');

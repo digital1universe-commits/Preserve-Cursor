@@ -14,10 +14,11 @@ npm run dev
 Open http://127.0.0.1:5173
 
 1. Accept the tracking consent gate.
-2. Use **New Cordon / New MP Land SAR / …** — each click creates a **new** job (never opens an existing one).
-3. Select seed jobs in the left list; inspect plans/briefings on the right; map overlays update in the centre.
-4. Toggle **Online / Offline**, **Air-gap**, **3D orbit**, **Street lights** in the top bar.
+2. Use **New Cordon / New MP Land SAR / …** — each opens an **entry form** (CAD number, security level, type-specific fields). Submit always creates a **new** job (never opens an existing one).
+3. Select seed jobs in the left list; edit details on the right (Save & replan); map overlays update in the centre.
+4. Toggle **Online / Offline**, **Air-gap**, **Map dark/light**, **3D orbit**, **Street lights** in the top bar.
 5. Switch users (including SERT) to see location privacy rules.
+6. Public order routes snap to Brisbane streets and cross only via bridges (Victoria / Goodwill / Story).
 
 ```bash
 npm test        # automated tests
