@@ -10,6 +10,7 @@ export function IncidentDrawer({ open }: { open: boolean }) {
   const activeIncidentId = usePreserveStore((s) => s.activeIncidentId);
   const joinIncident = usePreserveStore((s) => s.joinIncident);
   const selectIncident = usePreserveStore((s) => s.selectIncident);
+  const returnToHome = usePreserveStore((s) => s.returnToHome);
   const linkPublicOrderOpposing = usePreserveStore((s) => s.linkPublicOrderOpposing);
   const replanIncident = usePreserveStore((s) => s.replanIncident);
   const tracks = usePreserveStore((s) => s.tracks);
@@ -56,7 +57,16 @@ export function IncidentDrawer({ open }: { open: boolean }) {
         <div className="drawer-body">
           <div className="drawer-head">
             <h2>{incident.title}</h2>
-            <button type="button" className="btn ghost compact" onClick={() => selectIncident(null)}>Close</button>
+            <button
+              type="button"
+              className="btn ghost compact"
+              onClick={() => {
+                selectIncident(null);
+                returnToHome();
+              }}
+            >
+              Close
+            </button>
           </div>
           <div className="tag-row">
             <span className="tag">{incident.jobNumber}</span>

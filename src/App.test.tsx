@@ -16,6 +16,7 @@ describe('Preserve night-ops shell', () => {
       currentUserId: 'u-comms',
       incidents: [],
       activeIncidentId: null,
+      workspaceMode: 'home',
       draftType: null,
       markings: [],
       structureLabels: [],
@@ -41,6 +42,7 @@ describe('Preserve night-ops shell', () => {
     usePreserveStore.setState({ trackingConsent: true });
     render(<App />);
 
+    await user.click(screen.getByTestId('new-incident-menu'));
     await user.click(screen.getByTestId('new-cordon'));
     expect(screen.getByTestId('new-incident-form')).toBeInTheDocument();
     await user.type(screen.getByTestId('form-title'), 'Wizard Cordon A');
@@ -53,6 +55,7 @@ describe('Preserve night-ops shell', () => {
     expect(firstId).toBeTruthy();
     expect(usePreserveStore.getState().incidents[0].title).toContain('Wizard Cordon A');
 
+    await user.click(screen.getByTestId('new-incident-menu'));
     await user.click(screen.getByTestId('new-cordon'));
     await user.type(screen.getByTestId('form-title'), 'Wizard Cordon B');
     await user.click(screen.getByTestId('form-next'));

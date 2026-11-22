@@ -31,7 +31,27 @@ export type RoadNodeId =
   | 'edward_st'
   | 'alice_st'
   | 'goodwill_br_s'
-  | 'goodwill_br_n';
+  | 'goodwill_br_n'
+  | 'elizabeth_st'
+  | 'charlotte_st'
+  | 'mary_st'
+  | 'turbot_st'
+  | 'brunswick_st'
+  | 'james_st'
+  | 'wickham_tce'
+  | 'cordelia_st'
+  | 'merivale_st'
+  | 'vulture_st'
+  | 'boundary_st'
+  | 'hope_st'
+  | 'albert_st'
+  | 'edward_st_north'
+  | 'ann_st_mid'
+  | 'creek_st_north'
+  | 'wharf_st'
+  | 'makerston_st'
+  | 'countess_st'
+  | 'upper_roma';
 
 export interface RoadNode {
   id: RoadNodeId;
@@ -117,6 +137,26 @@ export const ROAD_NODES: Record<RoadNodeId, RoadNode> = {
     position: { lat: -27.4778, lng: 153.0278 },
     kind: 'bridge',
   },
+  elizabeth_st: { id: 'elizabeth_st', name: 'Elizabeth Street', position: { lat: -27.4708, lng: 153.0262 } },
+  charlotte_st: { id: 'charlotte_st', name: 'Charlotte Street', position: { lat: -27.4718, lng: 153.0272 } },
+  mary_st: { id: 'mary_st', name: 'Mary Street', position: { lat: -27.4728, lng: 153.028 } },
+  turbot_st: { id: 'turbot_st', name: 'Turbot Street', position: { lat: -27.4662, lng: 153.0228 } },
+  brunswick_st: { id: 'brunswick_st', name: 'Brunswick Street', position: { lat: -27.4562, lng: 153.0342 } },
+  james_st: { id: 'james_st', name: 'James Street', position: { lat: -27.4548, lng: 153.0375 } },
+  wickham_tce: { id: 'wickham_tce', name: 'Wickham Terrace', position: { lat: -27.4642, lng: 153.0245 } },
+  cordelia_st: { id: 'cordelia_st', name: 'Cordelia Street', position: { lat: -27.4788, lng: 153.0145 } },
+  merivale_st: { id: 'merivale_st', name: 'Merivale Street', position: { lat: -27.4768, lng: 153.0158 } },
+  vulture_st: { id: 'vulture_st', name: 'Vulture Street', position: { lat: -27.4825, lng: 153.0185 } },
+  boundary_st: { id: 'boundary_st', name: 'Boundary Street', position: { lat: -27.4795, lng: 153.0085 } },
+  hope_st: { id: 'hope_st', name: 'Hope Street', position: { lat: -27.4772, lng: 153.0122 } },
+  albert_st: { id: 'albert_st', name: 'Albert Street', position: { lat: -27.4688, lng: 153.0258 } },
+  edward_st_north: { id: 'edward_st_north', name: 'Edward Street north', position: { lat: -27.4655, lng: 153.0278 } },
+  ann_st_mid: { id: 'ann_st_mid', name: 'Ann Street mid', position: { lat: -27.4605, lng: 153.0305 } },
+  creek_st_north: { id: 'creek_st_north', name: 'Creek Street north', position: { lat: -27.4648, lng: 153.0295 } },
+  wharf_st: { id: 'wharf_st', name: 'Wharf Street', position: { lat: -27.4665, lng: 153.0312 } },
+  makerston_st: { id: 'makerston_st', name: 'Makerston Street', position: { lat: -27.4648, lng: 153.0168 } },
+  countess_st: { id: 'countess_st', name: 'Countess Street', position: { lat: -27.4635, lng: 153.0152 } },
+  upper_roma: { id: 'upper_roma', name: 'Upper Roma Street', position: { lat: -27.4668, lng: 153.0145 } },
 };
 
 export const ROAD_EDGES: RoadEdge[] = [
@@ -152,8 +192,46 @@ export const ROAD_EDGES: RoadEdge[] = [
   { a: 'story_br_s', b: 'story_br_n', name: 'Story Bridge', bridge: true },
   { a: 'story_br_n', b: 'fortitude_valley', name: 'Wickham Tce approach' },
   { a: 'story_br_n', b: 'ann_st_valley', name: 'Bowen Tce' },
-  { a: 'kangaroo_point', b: 'alice_st', name: 'KP cliffs walk (ferry link demo)' },
   { a: 'roma_st', b: 'ann_st_west', name: 'Roma / Ann' },
+  // CBD inland grid
+  { a: 'queen_st_mall', b: 'elizabeth_st', name: 'Elizabeth / Queen' },
+  { a: 'elizabeth_st', b: 'charlotte_st', name: 'Charlotte Street' },
+  { a: 'charlotte_st', b: 'mary_st', name: 'Mary Street' },
+  { a: 'mary_st', b: 'alice_st', name: 'Alice / Mary' },
+  { a: 'elizabeth_st', b: 'edward_st', name: 'Elizabeth / Edward' },
+  { a: 'charlotte_st', b: 'albert_st', name: 'Charlotte / Albert' },
+  { a: 'albert_st', b: 'city_hall', name: 'Albert Street' },
+  { a: 'albert_st', b: 'adelaide_st', name: 'Albert / Adelaide' },
+  { a: 'city_hall', b: 'turbot_st', name: 'Turbot approach' },
+  { a: 'turbot_st', b: 'wickham_tce', name: 'Turbot / Wickham Tce' },
+  { a: 'wickham_tce', b: 'ann_st_west', name: 'Wickham Tce east' },
+  { a: 'roma_st', b: 'turbot_st', name: 'Roma / Turbot' },
+  { a: 'roma_st', b: 'makerston_st', name: 'Makerston' },
+  { a: 'makerston_st', b: 'countess_st', name: 'Countess St' },
+  { a: 'countess_st', b: 'upper_roma', name: 'Upper Roma' },
+  { a: 'upper_roma', b: 'roma_st', name: 'Roma loop' },
+  // Valley inland
+  { a: 'ann_st_west', b: 'ann_st_mid', name: 'Ann Street mid' },
+  { a: 'ann_st_mid', b: 'ann_st_valley', name: 'Ann Street east' },
+  { a: 'ann_st_mid', b: 'brunswick_st', name: 'Brunswick connector' },
+  { a: 'brunswick_st', b: 'fortitude_valley', name: 'Brunswick Street' },
+  { a: 'fortitude_valley', b: 'james_st', name: 'James Street' },
+  { a: 'james_st', b: 'wickham_st', name: 'James / Wickham' },
+  { a: 'creek_st', b: 'creek_st_north', name: 'Creek Street north' },
+  { a: 'creek_st_north', b: 'edward_st_north', name: 'Creek / Edward north' },
+  { a: 'edward_st_north', b: 'ann_st_west', name: 'Edward / Ann' },
+  { a: 'creek_st_north', b: 'wharf_st', name: 'Wharf Street' },
+  { a: 'wharf_st', b: 'eagle_st', name: 'Wharf / Eagle' },
+  // South Brisbane inland (not water)
+  { a: 'west_end', b: 'boundary_st', name: 'Boundary Street' },
+  { a: 'boundary_st', b: 'hope_st', name: 'Hope Street' },
+  { a: 'hope_st', b: 'cordelia_st', name: 'Cordelia west' },
+  { a: 'cordelia_st', b: 'grey_st', name: 'Cordelia / Grey' },
+  { a: 'cordelia_st', b: 'merivale_st', name: 'Merivale' },
+  { a: 'merivale_st', b: 'melbourne_st_sb', name: 'Merivale / Melbourne' },
+  { a: 'vulture_st', b: 'south_bank', name: 'Vulture / South Bank' },
+  { a: 'vulture_st', b: 'grey_st', name: 'Vulture / Grey' },
+  { a: 'vulture_st', b: 'hope_st', name: 'Vulture / Hope' },
 ];
 
 function edgeLength(e: RoadEdge): number {

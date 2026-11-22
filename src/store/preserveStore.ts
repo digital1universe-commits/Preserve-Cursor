@@ -48,6 +48,8 @@ export interface PreserveState {
   users: User[];
   incidents: Incident[];
   activeIncidentId: string | null;
+  /** Home board (jobs-first) vs large-map incident workspace. */
+  workspaceMode: 'home' | 'incident';
   draftType: IncidentType | null;
   markings: MapMarking[];
   structureLabels: StructureLabel[];
@@ -68,6 +70,8 @@ export interface PreserveState {
   setMapDarkMode: (v: boolean) => void;
   setShowStreetLights: (v: boolean) => void;
   selectIncident: (id: string | null) => void;
+  openIncidentWorkspace: (id: string) => void;
+  returnToHome: () => void;
   openNewIncidentForm: (type: IncidentType) => void;
   closeNewIncidentForm: () => void;
   joinIncident: (incidentId: string, userId?: string) => void;
@@ -217,6 +221,7 @@ export const usePreserveStore = create<PreserveState>()(
       users: DEMO_USERS,
       incidents: buildSeedIncidents(),
       activeIncidentId: null,
+      workspaceMode: 'home',
       draftType: null,
       markings: [],
       structureLabels: [],
@@ -237,6 +242,8 @@ export const usePreserveStore = create<PreserveState>()(
       setMapDarkMode: (v) => set({ mapDarkMode: v }),
       setShowStreetLights: (v) => set({ showStreetLights: v }),
       selectIncident: (id) => set({ activeIncidentId: id, draftType: null }),
+      openIncidentWorkspace: (id) => set({ activeIncidentId: id, workspaceMode: 'incident', draftType: null }),
+      returnToHome: () => set({ workspaceMode: 'home' }),
       openNewIncidentForm: (type) => set({ draftType: type }),
       closeNewIncidentForm: () => set({ draftType: null }),
 
@@ -249,6 +256,7 @@ export const usePreserveStore = create<PreserveState>()(
               : inc,
           ),
           activeIncidentId: incidentId,
+          workspaceMode: 'incident',
           tracks: s.tracks.map((t) => (t.userId === uid ? { ...t, incidentId } : t)),
         }));
       },
@@ -288,6 +296,7 @@ export const usePreserveStore = create<PreserveState>()(
         set((s) => ({
           incidents: [incident, ...s.incidents],
           activeIncidentId: incident.id,
+          workspaceMode: 'incident',
           draftType: null,
         }));
         return incident;
@@ -396,6 +405,7 @@ export const usePreserveStore = create<PreserveState>()(
           tracks: defaultTracks(),
           streetLights: SEED_STREET_LIGHTS,
           activeIncidentId: null,
+          workspaceMode: 'home',
           draftType: null,
           egressBlockedCount: 0,
         }),

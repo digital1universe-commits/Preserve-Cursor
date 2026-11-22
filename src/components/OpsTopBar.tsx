@@ -15,15 +15,29 @@ export function OpsTopBar() {
   const showStreetLights = usePreserveStore((s) => s.showStreetLights);
   const setShowStreetLights = usePreserveStore((s) => s.setShowStreetLights);
   const resetDemoData = usePreserveStore((s) => s.resetDemoData);
+  const workspaceMode = usePreserveStore((s) => s.workspaceMode);
+  const returnToHome = usePreserveStore((s) => s.returnToHome);
   const user = DEMO_USERS.find((u) => u.id === currentUserId) ?? DEMO_USERS[0];
 
   return (
     <header className="ops-top">
       <div className="brand-lockup">
         <div className="mark">Preserve</div>
-        <div className="sub">QLD Police · Night Ops</div>
+        <div className="sub">
+          {workspaceMode === 'home' ? 'QLD Police · Jobs board' : 'QLD Police · Incident ops'}
+        </div>
       </div>
       <div className="ops-toolbar">
+        {workspaceMode === 'incident' && (
+          <button
+            type="button"
+            className="chip on"
+            data-testid="return-home"
+            onClick={() => returnToHome()}
+          >
+            ← Jobs board
+          </button>
+        )}
         <label className="chip">
           User
           <select

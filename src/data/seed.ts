@@ -7,7 +7,7 @@ import { planRoadBlock } from '../engines/roadBlock';
 import { QLD } from '../geo/qld';
 import { buildCityStreetLights } from './streetLights';
 
-/** City-scale street lights for night ops (CBD + surrounds). */
+/** Real OSM highway=street_lamp nodes for Brisbane CBD (coverage incomplete). */
 export const SEED_STREET_LIGHTS = buildCityStreetLights();
 
 export function buildSeedIncidents(): Incident[] {

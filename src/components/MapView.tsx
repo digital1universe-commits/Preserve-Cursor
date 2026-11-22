@@ -8,6 +8,7 @@ import { mapStyleUrl, OMT_SOURCE } from '../map/styles';
 import { visibleTracks } from '../tracking/visibility';
 import { usePreserveStore } from '../store/preserveStore';
 import { DEMO_USERS } from '../auth/roles';
+import { getStreetLightSourceMeta } from '../data/streetLights';
 
 type GjFeature = {
   type: 'Feature';
@@ -141,6 +142,8 @@ export function MapView() {
   const mapDarkMode = usePreserveStore((s) => s.mapDarkMode);
   const showStreetLights = usePreserveStore((s) => s.showStreetLights);
   const streetLights = usePreserveStore((s) => s.streetLights);
+  const streetLightMeta = getStreetLightSourceMeta(streetLights);
+  const workspaceMode = usePreserveStore((s) => s.workspaceMode);
   const tracks = usePreserveStore((s) => s.tracks);
   const currentUserId = usePreserveStore((s) => s.currentUserId);
   const markings = usePreserveStore((s) => s.markings);
@@ -188,11 +191,44 @@ export function MapView() {
       }
     });
     mapRef.current = map;
-    return () => { map.remove(); mapRef.current = null; };
+    (window as unknown as { __preserveMap?: MapLibreMap }).__preserveMap = map;
+    return () => {
+      const w = window as unknown as { __preserveMap?: MapLibreMap };
+      if (w.__preserveMap === map) delete w.__preserveMap;
+      map.remove();
+      mapRef.current = null;
+    };
   }, [addMarking, addStructureLabel]);
 
   useEffect(() => { const map = mapRef.current; if (!map) return; map.setStyle(mapStyleUrl(mapDarkMode)); }, [mapDarkMode]);
-  useEffect(() => { const map = mapRef.current; if (!map) return; map.easeTo({ pitch: mapPitch3d ? 62 : 0, bearing: mapPitch3d ? 28 : 0, duration: 700 }); }, [mapPitch3d]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (workspaceMode === 'home') {
+      map.easeTo({ pitch: 28, bearing: 12, duration: 500 });
+    } else {
+      map.easeTo({ pitch: mapPitch3d ? 62 : 0, bearing: mapPitch3d ? 28 : 0, duration: 700 });
+    }
+  }, [mapPitch3d, workspaceMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const resize = () => map.resize();
+    resize();
+    const t = window.setTimeout(resize, 80);
+    if (workspaceMode === 'home') {
+      map.easeTo({
+        center: [QLD.brisbaneCbd.lng, QLD.brisbaneCbd.lat],
+        zoom: 12.4,
+        pitch: 28,
+        bearing: 12,
+        duration: 500,
+      });
+      lastFly.current = null;
+    }
+    return () => window.clearTimeout(t);
+  }, [workspaceMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -201,15 +237,17 @@ export function MapView() {
       ensureOverlayLayers(map);
       setData(map, 'preserve-lights', streetLights.map((l) => pointFeature(l.position, { type: l.type })));
       if (map.getLayer('preserve-lights')) map.setLayoutProperty('preserve-lights', 'visibility', showStreetLights ? 'visible' : 'none');
-      if (showStreetLights) map.easeTo({ center: [QLD.brisbaneCbd.lng, QLD.brisbaneCbd.lat], zoom: Math.max(map.getZoom(), 13.2), duration: 600 });
+      if (showStreetLights && workspaceMode === 'incident') {
+        map.easeTo({ center: [QLD.brisbaneCbd.lng, QLD.brisbaneCbd.lat], zoom: Math.max(map.getZoom(), 13.2), duration: 600 });
+      }
     };
     if (map.isStyleLoaded()) apply(); else map.once('style.load', apply);
-  }, [showStreetLights, streetLights]);
+  }, [showStreetLights, streetLights, workspaceMode]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const overlay = buildOverlay(incident);
+    const overlay = buildOverlay(workspaceMode === 'incident' ? incident : null);
     const visTracks = visibleTracks(viewer, tracks).map((t) => pointFeature(t.position, { label: `${t.callSign}`, kind: t.isSert ? 'sert' : 'unit' }));
     const marks = markings.filter((m) => m.incidentId === activeIncidentId || m.scope === 'permanent').map((m) => pointFeature(m.position, { label: m.text, kind: 'mark' }));
     const structures = structureLabels.filter((s) => s.incidentId === activeIncidentId).map((s) => pointFeature(s.position, { label: s.label, colour: STRUCTURE_SIDE_COLOURS[s.side] }));
@@ -226,11 +264,11 @@ export function MapView() {
       if (map.getLayer('preserve-lights')) map.setLayoutProperty('preserve-lights', 'visibility', usePreserveStore.getState().showStreetLights ? 'visible' : 'none');
     };
     if (map.isStyleLoaded()) apply(); else map.once('style.load', apply);
-    if (incident && lastFly.current !== incident.id) {
+    if (workspaceMode === 'incident' && incident && lastFly.current !== incident.id) {
       lastFly.current = incident.id;
       map.flyTo({ center: [incident.location.lng, incident.location.lat], zoom: incident.type === 'marine_sar' ? 10.5 : 14, pitch: usePreserveStore.getState().mapPitch3d ? 62 : map.getPitch(), essential: true });
     }
-  }, [incident, tracks, viewer, markings, structureLabels, activeIncidentId]);
+  }, [incident, tracks, viewer, markings, structureLabels, activeIncidentId, workspaceMode]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -247,7 +285,15 @@ export function MapView() {
       <div ref={containerRef} className="map-canvas" data-testid="map-root" />
       <div className="map-hud">
         <span className="chip">{online ? 'NET ONLINE' : 'OFFLINE CACHE'}</span>
-        <span className="chip" data-testid="lights-status">LIGHTS {showStreetLights ? `ON · ${streetLights.length}` : 'OFF'}</span>
+        <span
+          className="chip"
+          data-testid="lights-status"
+          title={`${streetLightMeta.attribution}. ${streetLightMeta.coverageNote}. Raw ${streetLightMeta.rawCount}, water-clipped ${streetLightMeta.waterClippedCount}.`}
+        >
+          {showStreetLights
+            ? `OSM street_lamp · ${streetLights.length} · incomplete`
+            : 'LIGHTS OFF'}
+        </span>
         <span className="chip">{mapDarkMode ? 'NIGHT BASEMAP' : 'DAY BASEMAP'}</span>
         <span className="chip">{mapPitch3d ? '3D ORBIT' : '2D'}</span>
         <span className="chip">ALT annotate · SHIFT structure</span>
