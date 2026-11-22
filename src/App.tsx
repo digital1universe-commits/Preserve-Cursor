@@ -23,8 +23,17 @@ export default function App() {
     >
       <OpsTopBar />
       <JobsRail />
-      <MapView />
-      {home ? <DutyPanel /> : <IncidentDrawer open={Boolean(activeIncidentId)} />}
+      {home ? (
+        <div className="home-right-stack" data-testid="home-right-stack">
+          <MapView />
+          <DutyPanel />
+        </div>
+      ) : (
+        <>
+          <MapView />
+          <IncidentDrawer open={Boolean(activeIncidentId)} />
+        </>
+      )}
       <CadWizard />
     </div>
   );

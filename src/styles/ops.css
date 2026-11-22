@@ -120,22 +120,34 @@ button {
   position: relative;
 }
 
-/* Home / jobs board: ~50% jobs · ~25% map overview · ~25% duty desk */
+/* Home / jobs board: left half jobs · right half stacked (map top, duty desk below) */
 .ops-shell.mode-home {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.5fr) minmax(0, 0.5fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .ops-shell.mode-home .ops-rail {
   border-right: 1px solid var(--line);
 }
 
+.home-right-stack {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1.15fr);
+  min-width: 0;
+  min-height: 0;
+}
+
 .ops-shell.mode-home .map-stage {
-  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   min-height: 0;
 }
 
 .ops-shell.mode-home .map-hud .chip:nth-child(n + 3) {
   display: none;
+}
+
+.ops-shell.mode-home .duty-panel {
+  min-height: 0;
+  overflow: auto;
 }
 
 /* Open incident: map becomes primary again */
@@ -1100,14 +1112,18 @@ button {
 }
 
 @media (max-width: 1100px) {
-  .ops-shell.mode-home,
-  .ops-shell.mode-incident {
+  .ops-shell.mode-home {
     grid-template-columns: 1fr;
-    grid-template-rows: var(--top-h) minmax(280px, 42vh) minmax(220px, 32vh) minmax(220px, 32vh);
+    grid-template-rows: var(--top-h) minmax(280px, 40vh) minmax(360px, 50vh);
   }
 
   .ops-shell.mode-incident {
+    grid-template-columns: 1fr;
     grid-template-rows: var(--top-h) minmax(220px, 34vh) minmax(280px, 40vh);
+  }
+
+  .home-right-stack {
+    grid-template-rows: minmax(180px, 40%) minmax(220px, 60%);
   }
 
   .ops-rail {
@@ -1117,7 +1133,7 @@ button {
   }
 
   .duty-panel {
-    border-top: 1px solid var(--line);
+    border-top: none;
   }
 
   .ops-drawer {
