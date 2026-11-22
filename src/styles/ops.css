@@ -297,16 +297,20 @@ button {
 }
 
 .new-incident-btn {
-  border-color: var(--line-strong) !important;
-  color: var(--text-soft) !important;
-  letter-spacing: 0.04em;
+  min-height: 42px;
+  padding: 0.7rem 1.1rem !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: none !important;
+  box-shadow: 0 0 0 1px rgba(255, 220, 120, 0.35), 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .new-incident-btn:hover,
 .new-incident-btn[aria-expanded='true'] {
-  border-color: var(--amber) !important;
-  color: var(--amber) !important;
-  background: var(--amber-dim) !important;
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 1px rgba(255, 230, 140, 0.55), 0 8px 22px rgba(0, 0, 0, 0.4);
 }
 
 .new-menu-panel {
@@ -350,23 +354,15 @@ button {
   background: var(--text-dim);
 }
 
-.type-swatch.type-cordon,
-.type-pill.type-cordon {
-  background: rgba(224, 122, 61, 0.16);
-  border-color: rgba(224, 122, 61, 0.55);
-  color: #f0b08a;
-}
-
 .type-swatch.type-cordon {
   background: var(--type-cordon);
   border: none;
 }
 
-.type-swatch.type-land_sar,
-.type-pill.type-land_sar {
-  background: rgba(74, 163, 106, 0.16);
-  border-color: rgba(74, 163, 106, 0.55);
-  color: #9fd4b2;
+.type-pill.type-cordon {
+  background: #c45a22;
+  border-color: #e07a3d;
+  color: #fff4ea;
 }
 
 .type-swatch.type-land_sar {
@@ -374,11 +370,10 @@ button {
   border: none;
 }
 
-.type-swatch.type-marine_sar,
-.type-pill.type-marine_sar {
-  background: rgba(61, 143, 212, 0.16);
-  border-color: rgba(61, 143, 212, 0.55);
-  color: #9bc4ef;
+.type-pill.type-land_sar {
+  background: #2f7a4c;
+  border-color: #4aa36a;
+  color: #e8fff0;
 }
 
 .type-swatch.type-marine_sar {
@@ -386,11 +381,10 @@ button {
   border: none;
 }
 
-.type-swatch.type-public_order,
-.type-pill.type-public_order {
-  background: rgba(196, 94, 200, 0.16);
-  border-color: rgba(196, 94, 200, 0.5);
-  color: #e0a8e4;
+.type-pill.type-marine_sar {
+  background: #1f6aad;
+  border-color: #3d8fd4;
+  color: #e8f4ff;
 }
 
 .type-swatch.type-public_order {
@@ -398,16 +392,21 @@ button {
   border: none;
 }
 
-.type-swatch.type-road_block,
-.type-pill.type-road_block {
-  background: rgba(212, 160, 23, 0.16);
-  border-color: rgba(212, 160, 23, 0.55);
-  color: #efd08a;
+.type-pill.type-public_order {
+  background: #8a3a90;
+  border-color: #c45ec8;
+  color: #fceaff;
 }
 
 .type-swatch.type-road_block {
   background: var(--type-road);
   border: none;
+}
+
+.type-pill.type-road_block {
+  background: #9a7410;
+  border-color: #d4a017;
+  color: #fff8e4;
 }
 
 .new-menu-type {
@@ -421,14 +420,14 @@ button {
 
 .job-table-head {
   display: grid;
-  grid-template-columns: 7.4rem 4.5rem minmax(0, 1fr) 3.5rem 4.2rem;
-  gap: 0.4rem;
-  padding: 0.4rem 0.85rem 0.35rem;
+  grid-template-columns: 8.4rem 5.6rem minmax(0, 1fr) 4.2rem 4.6rem;
+  gap: 0.45rem;
+  padding: 0.45rem 0.85rem 0.4rem;
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 0.68rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--text-soft);
   border-bottom: 1px solid var(--line);
 }
 
@@ -477,25 +476,25 @@ button {
 .job-scroll {
   flex: 1;
   overflow: auto;
-  padding: 0.2rem 0.45rem 0.85rem;
+  padding: 0.25rem 0.45rem 0.85rem;
   display: grid;
-  gap: 0.2rem;
+  gap: 0.35rem;
   align-content: start;
 }
 
 .job-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 7.4rem 4.5rem minmax(0, 1fr) 3.5rem 4.2rem;
-  gap: 0.4rem;
+  grid-template-columns: 8.4rem 5.6rem minmax(0, 1fr) 4.2rem 4.6rem;
+  gap: 0.45rem;
   align-items: center;
-  border: 1px solid transparent;
-  border-left: 3px solid transparent;
-  background: rgba(255, 255, 255, 0.015);
-  padding: 0.72rem 0.7rem;
+  border: 1px solid rgba(140, 170, 190, 0.1);
+  border-left: 4px solid transparent;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.95rem 0.75rem;
   text-align: left;
   border-radius: 0;
-  min-height: 3.15rem;
+  min-height: 4.1rem;
 }
 
 .job-row.type-cordon {
@@ -532,8 +531,9 @@ button {
 
 .job-row .cad {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--amber);
+  font-size: 15px;
+  font-weight: 600;
+  color: #f0c84a;
   letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;
@@ -542,21 +542,23 @@ button {
 
 .job-row .type-pill {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-soft);
   border: 1px solid var(--line);
-  padding: 0.22rem 0.28rem;
+  padding: 0.38rem 0.45rem;
   text-align: center;
-  border-radius: 2px;
+  border-radius: 3px;
   white-space: nowrap;
 }
 
 .job-row .title {
-  font-size: 0.88rem;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   line-height: 1.3;
+  color: #eef4fa;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -565,14 +567,15 @@ button {
 
 .job-row .sec-pill {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-dim);
-  border: 1px solid var(--line);
-  padding: 0.2rem 0.28rem;
+  color: var(--text-soft);
+  border: 1px solid var(--line-strong);
+  padding: 0.28rem 0.32rem;
   text-align: center;
-  border-radius: 2px;
+  border-radius: 3px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -581,9 +584,9 @@ button {
 }
 
 .job-row .sec-pill .sec-full {
-  font-size: 0.52rem;
+  font-size: 0.62rem;
   letter-spacing: 0.02em;
-  opacity: 0.85;
+  opacity: 0.9;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -607,25 +610,27 @@ button {
 
 .job-row .status-pill {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   text-align: center;
-  padding: 0.22rem 0.25rem;
-  border-radius: 2px;
+  padding: 0.32rem 0.35rem;
+  border-radius: 3px;
   border: 1px solid var(--line);
-  color: var(--text-dim);
+  color: var(--text-soft);
 }
 
 .job-row .status-active {
-  color: #8fd4ad;
-  border-color: rgba(61, 154, 106, 0.45);
-  background: rgba(61, 154, 106, 0.12);
+  color: #b6f0cc;
+  border-color: rgba(61, 154, 106, 0.65);
+  background: rgba(61, 154, 106, 0.22);
 }
 
 .job-row .status-open {
-  color: #cfe8f2;
-  border-color: rgba(61, 184, 197, 0.4);
+  color: #dff4fb;
+  border-color: rgba(61, 184, 197, 0.55);
+  background: rgba(61, 184, 197, 0.12);
 }
 
 .job-row .status-closed {

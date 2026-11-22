@@ -7,11 +7,11 @@ import { usePreserveStore } from '../store/preserveStore';
 const NEW_TYPES: IncidentType[] = ['cordon', 'land_sar', 'marine_sar', 'public_order', 'road_block'];
 
 const TYPE_SHORT: Record<IncidentType, string> = {
-  cordon: 'Cordon',
-  land_sar: 'Land SAR',
-  marine_sar: 'Marine',
-  public_order: 'Pub Ord',
-  road_block: 'Road blk',
+  cordon: 'CORDON',
+  land_sar: 'MP/SAR',
+  marine_sar: 'MARINE',
+  public_order: 'PUB ORD',
+  road_block: 'ROAD BLK',
 };
 
 const SEC_SHORT: Record<SecurityLevel, string> = {
@@ -73,12 +73,12 @@ export function JobsRail() {
           <div className="new-menu" ref={menuRef}>
             <button
               type="button"
-              className="btn ghost compact new-incident-btn"
+              className="btn primary new-incident-btn"
               data-testid="new-incident-menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((o) => !o)}
             >
-              + New
+              + New incident
             </button>
             {menuOpen && (
               <div className="new-menu-panel" role="menu" data-testid="new-incident-menu-panel">
